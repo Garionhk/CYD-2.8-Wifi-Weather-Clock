@@ -537,10 +537,11 @@ static const char BUS_JS[] PROGMEM = R"JS(
   };
 
   // ---- wiring ------------------------------------------------------------
+  // Counted from the page rather than hard-coded: the number of slots is
+  // BUS_SLOTS in settings.h, and a second copy of it here would be a second
+  // place to forget.
   var pickers = [];
-  for (var i = 0; i < 3; i++) {
-    if (document.getElementById('bpick' + i)) pickers.push(new Picker(i));
-  }
+  for (var i = 0; document.getElementById('bpick' + i); i++) pickers.push(new Picker(i));
 
   // Bake and upload before the form navigates away -- the device restarts
   // moments after /save, so there is no "after".

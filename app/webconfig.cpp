@@ -125,7 +125,7 @@ static const char PAGE_TAIL[] PROGMEM =
 // parsed, so the value the user actually typed is available -- and until now it
 // was thrown away, because sendPage repopulated everything from g_settings. A
 // rejected save silently reverted the form. That was survivable with four
-// fields; after three bus drill-downs it would be infuriating.
+// fields; after four bus drill-downs it would be infuriating.
 //
 // NOT used for `pass`, and that is deliberate: the password field renders as a
 // placeholder rather than a value (see below), and echoing it back would put
@@ -262,7 +262,7 @@ static void sendPage(const String& error = String()) {
 // the bitmap matches what is being saved. A slot edited by hand in the manual
 // field has no upload, so its old bitmap is wrong and gets dropped -- and the
 // row falls back to the English name rather than showing the previous stop's.
-static bool labelUploaded[BUS_SLOTS] = { false, false, false };
+static bool labelUploaded[BUS_SLOTS] = {};
 
 static void handleRoot() {
   for (int i = 0; i < BUS_SLOTS; i++) labelUploaded[i] = false;

@@ -575,9 +575,9 @@ static void sunMoonTick() {
 //
 //   * All Chinese is 1-bit bitmaps (labels.h). The fixed vocabulary is baked at
 //     build time; stop names and destinations are baked by the browser. When a
-//     user bitmap is missing -- which is the state after every reflash, because
-//     that wipes LittleFS but not NVS -- the row falls back to the English name
-//     in the built-in font. Never blank.
+//     user bitmap is missing -- a stop typed into "Manual entry", a save made
+//     with no internet to bake against, an erased filesystem -- the row falls
+//     back to the English name in the built-in font. Never blank.
 //
 //   * Minutes are derived from ABSOLUTE epoch ETAs on every tick, never stored
 //     as a countdown. So a five-minute-old fetch still shows the right number,
@@ -606,7 +606,10 @@ static const uint32_t BUS_CHECK_AFTER_S = 6 * 3600;
 static const uint32_t BUS_AGE_WARN_S = 600;
 static const uint32_t BUS_AGE_OLD_S  = 1800;
 
-static const uint32_t BUS_PAGE_MS = 8000;
+// Two pages at 6 s fit the 12 s dwell exactly, so an unattended rotation shows
+// both of them once rather than the first one twice. Four slots is what makes
+// that land: it is always exactly two pages.
+static const uint32_t BUS_PAGE_MS = 6000;
 
 static int      busSlots[BUS_SLOTS];        // configured slot indices, compacted
 static int      busCount   = 0;

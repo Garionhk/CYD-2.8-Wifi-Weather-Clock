@@ -12,6 +12,7 @@
 
 #include <Arduino.h>
 #include <time.h>
+#include "settings.h"   // BUS_SLOTS
 
 // One bus/minibus slot's arrivals. ETAs are stored as ABSOLUTE epoch seconds,
 // never as "minutes from now", and that one choice buys most of the scene's
@@ -68,8 +69,8 @@ struct AppData {
   float    moonIlluminationPct = 0;
   time_t   moonrise = 0, moonset = 0;
 
-  // bus -- one entry per configured slot, indexed alongside g_settings.buses
-  BusEta   bus[3];
+  // bus -- one entry per slot, indexed alongside g_settings.buses
+  BusEta   bus[BUS_SLOTS];
 };
 
 extern AppData g_data;

@@ -22,12 +22,12 @@
 //
 // That handshake is the single dominant cost in this feature, and it happens
 // inside loop(). Weather already stalls loop() ~2 s every 15 minutes and nobody
-// notices (0.2% duty); doing the same for two of three bus slots would be
+// notices (0.2% duty); doing the same for three of four bus slots would be
 // visible. The four mitigations, in descending order of value:
 //
 //   1. touch_isDown() -- a 2 s stall under a finger eats the tap outright.
 //   2. One slot per tick, never a burst.
-//   3. Idle cadence of 300 s per slot, offset so one fetch runs per ~100 s.
+//   3. Idle cadence of 300 s per slot, offset so one fetch runs per ~75 s.
 //   4. The connection is CLOSED after every fetch, not held open.
 //
 // (4) deserves the note. The obvious optimisation is to keep the TLS session
@@ -42,22 +42,24 @@
 // column in the serial line below is there so this stays a measured decision.
 // ===========================================================================
 
-// Cadence. Idle: 300 s per slot at offsets 0/100/200, so one fetch runs per
-// ~100 s and a worst-case 2.5 s stall is ~2% duty. Active: 30 s per slot at
-// offsets 0/10/20 -- affordable precisely because the Clock's 1 Hz colon is not
+// Cadence. Idle: 300 s per slot, spread across BUS_SLOTS, so one fetch runs
+// per ~75 s and a worst-case 2.5 s stall is ~3% duty. Active: 30 s per slot at
+// 7.5 s offsets -- affordable precisely because the Clock's 1 Hz colon is not
 // on screen while this scene is, and a 300 s-old ABSOLUTE eta still counts down
 // correctly anyway, so idle staleness only costs a newly-appeared bus.
 static const uint32_t IDLE_PERIOD_MS   = 300000;
-static const uint32_t IDLE_OFFSET_MS   = 100000;
 static const uint32_t ACTIVE_PERIOD_MS = 30000;
-static const uint32_t ACTIVE_OFFSET_MS = 10000;
+// Derived, not written down: the slots have to divide the period evenly or two
+// of them drift onto the same tick, and hand-tuned offsets silently stopped
+// dividing the moment BUS_SLOTS went from three to four.
+static const uint32_t ACTIVE_OFFSET_MS = ACTIVE_PERIOD_MS / BUS_SLOTS;
 static const uint32_t ACTIVE_LINGER_MS = 30000;
 
 // Below this, time(nullptr) is the 1970 epoch and no countdown means anything.
 static const time_t CLOCK_SYNCED_AFTER = 1700000000;
 
-static uint32_t nextAttemptMs[BUS_SLOTS] = { 0, 0, 0 };
-static uint32_t backoffMin[BUS_SLOTS]    = { 0, 0, 0 };
+static uint32_t nextAttemptMs[BUS_SLOTS] = {};
+static uint32_t backoffMin[BUS_SLOTS]    = {};
 static uint32_t activeUntilMs = 0;
 static int      rrSlot = 0;      // round-robin cursor, so no slot can starve
 
@@ -405,7 +407,10 @@ void bus_begin() {
   // Extends the existing boot stagger (weather 0, aqi 5 s) so nothing lands on
   // top of anything else while the first paint is still happening.
   for (int i = 0; i < BUS_SLOTS; i++) {
-    nextAttemptMs[i] = 9000 + (uint32_t)i * 20000;   // 9 s, 29 s, 49 s
+    // Tight, not spread across the idle period: every slot should have data
+    // within the first minute or so, and each one then reschedules off its own
+    // completion time, which preserves the spacing from here on.
+    nextAttemptMs[i] = 9000 + (uint32_t)i * 15000;   // 9, 24, 39, 54 s
     backoffMin[i] = 0;
   }
 }

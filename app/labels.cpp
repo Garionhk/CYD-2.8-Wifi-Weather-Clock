@@ -1,5 +1,6 @@
 #include "labels.h"
 #include "theme.h"
+#include "settings.h"   // BUS_SLOTS
 #include <LittleFS.h>
 
 // One shared read buffer for user labels, sized by the LABEL_MAX_* caps.
@@ -158,7 +159,7 @@ void label_selfTest(uint32_t holdMs) {
   }
 
   Serial.printf("labels: self-test drew %d fixed labels; user slots:", (int)ZH_COUNT);
-  for (int s = 0; s < 3; s++)
+  for (int s = 0; s < BUS_SLOTS; s++)
     Serial.printf(" %d=%s/%s", s,
                   label_hasUser(s, UL_STOP) ? "stop" : "-",
                   label_hasUser(s, UL_DEST) ? "dest" : "-");

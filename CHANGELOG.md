@@ -5,9 +5,10 @@
 ### Added
 
 - **A fifth scene: 下一班車 / Next Bus.** The next Hong Kong bus or minibus at up
-  to three stops, in Traditional Chinese, with a coloured route badge that
+  to four stops, in Traditional Chinese, with a coloured route badge that
   slides toward the stop as the vehicle approaches. Two large rows so it reads
-  from across a room; three configured stops page between two screens every 8 s.
+  from across a room; four stops fill two pages, alternating every 6 s so an
+  unattended rotation shows both within one 12 s dwell.
   Tapping to it holds the rotation for 60 s instead of 45.
   - **KMB/LWB, Citybus and green minibus**, which are three genuinely different
     API models rather than one with a parameter. Direction filtering is done

@@ -60,8 +60,9 @@ struct BusStop {
   uint8_t  stopSeq  = 0;
 
   // Labels. The _tc pair is what the user reads; the _en pair is the fallback
-  // when the baked bitmap is missing, which happens after every reflash because
-  // that wipes LittleFS but not NVS. Keeping both is what makes that survivable.
+  // for when the baked bitmap is missing -- a stop typed into "Manual entry", a
+  // save made with no internet to bake against, or an erased filesystem.
+  // Keeping both is what stops any of those from rendering a blank row.
   String   stopTc, stopEn, destTc, destEn;
 
   bool valid() const;
@@ -69,7 +70,7 @@ struct BusStop {
 };
 
 // One pipe-separated string per slot, because NVS keys are capped at 15 chars
-// and twelve fields x three slots would need thirty-six of them. Round-trips
+// and twelve fields x four slots would need forty-eight of them. Round-trips
 // through the settings page's text field unchanged, which is what makes manual
 // entry a real fallback rather than a theoretical one.
 String busStop_pack(const BusStop& b);
@@ -78,7 +79,13 @@ bool   busStop_unpack(const String& packed, BusStop& out);
 // Human-readable, for serial and for the settings page's summary line.
 String busStop_describe(const BusStop& b);
 
-static const int BUS_SLOTS = 3;
+// Four stops, shown two to a page. Four rather than three because the scene
+// draws two rows, so four fills exactly two pages -- three left the second page
+// half empty. Raising it again means widening nothing else: the fetch cadence
+// offsets, the page count, the NVS keys and the settings form all derive from
+// this. What it does cost is politeness and duty cycle, ~288 requests per slot
+// per day on the idle cadence, so it is not free above single digits.
+static const int BUS_SLOTS = 4;
 
 struct Settings {
   String  wifiSsid;

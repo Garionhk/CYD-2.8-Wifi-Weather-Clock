@@ -257,7 +257,7 @@ Five scenes on a continuous rotation, with a persistent status strip:
 | Weather | 12 s | vector condition icon, temperature, feels-like, today's high/low, cloud/humidity/wind |
 | Sun & Moon | 12 s | sunrise→sunset arc, moon phase + illumination, UV, golden hour |
 | Air Quality | 12 s | US AQI colour-coded to the standard bands, PM2.5, pressure trend |
-| 下一班車 Next Bus | 12 s | next Hong Kong bus or minibus at up to three stops, in Traditional Chinese |
+| 下一班車 Next Bus | 12 s | next Hong Kong bus or minibus at up to four stops, in Traditional Chinese |
 
 The first four answer *what is it like outside*. The fifth answers *should I
 leave now*, which is why tapping to it holds the rotation for 60 s rather than

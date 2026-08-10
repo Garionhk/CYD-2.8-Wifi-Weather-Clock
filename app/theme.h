@@ -40,7 +40,8 @@ static const int NET_Y       = 180;
 // ---- Bus scene layout -----------------------------------------------------
 // Two rows, ~86 px each, over a 16 px header. Two and not four: the whole point
 // of this scene is being readable from the sofa, and four rows of 44 px is a
-// phone app on a wall. Three configured stops page between two screens.
+// phone app on a wall. Four configured stops page between two screens, which
+// is why four is the slot count -- it fills both pages exactly.
 //
 //            y=0..16    dots                        更新 47秒前
 //            y=20..106  ROW 0
