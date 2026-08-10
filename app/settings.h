@@ -87,6 +87,26 @@ String busStop_describe(const BusStop& b);
 // per day on the idle cadence, so it is not free above single digits.
 static const int BUS_SLOTS = 4;
 
+// ---------------------------------------------------------------------------
+// Scene rotation
+// ---------------------------------------------------------------------------
+// Which scenes appear, and how long each one holds. Kept here rather than in
+// the scene table because both are the owner's preference, not a property of
+// the code -- somebody who never looks at air quality should not have to
+// re-flash to stop it appearing, which is the same argument that moved WiFi
+// credentials out of config.h.
+//
+// SCENE_SLOTS must equal the number of rows in scenes.cpp's table; a
+// static_assert there enforces it, so adding a scene fails the build rather
+// than silently losing its settings.
+static const int SCENE_SLOTS = 5;
+
+// Bounds for a dwell. Below ~4 s a scene is gone before it can be read; above
+// a few minutes the rotation has effectively stopped and the pin gesture is
+// the better tool.
+static const uint16_t SCENE_DWELL_MIN_S = 4;
+static const uint16_t SCENE_DWELL_MAX_S = 600;
+
 struct Settings {
   String  wifiSsid;
   String  wifiPass;
@@ -99,6 +119,11 @@ struct Settings {
   uint8_t units       = UNITS_METRIC;
   bool    provisioned = false;         // false until the user has saved once
   BusStop buses[BUS_SLOTS];            // all unset by default -- see valid()
+
+  // Defaults match the dwells the scene table shipped with, so a device that
+  // has never saved behaves exactly as before.
+  bool     sceneOn[SCENE_SLOTS]     = { true, true, true, true, true };
+  uint16_t sceneDwellS[SCENE_SLOTS] = { 35, 12, 12, 12, 12 };
 };
 
 extern Settings g_settings;

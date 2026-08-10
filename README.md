@@ -259,6 +259,9 @@ Five scenes on a continuous rotation, with a persistent status strip:
 | Air Quality | 12 s | US AQI colour-coded to the standard bands, PM2.5, pressure trend |
 | 下一班車 Next Bus | 12 s | next Hong Kong bus or minibus at up to four stops, in Traditional Chinese |
 
+Any screen can be switched off from the settings page, and each one's time on
+screen adjusted, so the rotation is only the screens you actually want.
+
 The first four answer *what is it like outside*. The fifth answers *should I
 leave now*, which is why tapping to it holds the rotation for 60 s rather than
 the usual 45 — you tap to watch a countdown, not to read a number once. It is

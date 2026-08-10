@@ -1009,6 +1009,53 @@ static Scene scenes[] = {
 };
 static const int SCENE_COUNT = sizeof(scenes) / sizeof(scenes[0]);
 
+// Adding a scene without widening the settings arrays would silently drop its
+// on/off state and dwell, so make it a build error instead.
+static_assert(SCENE_COUNT == SCENE_SLOTS,
+              "SCENE_SLOTS in settings.h must match the scene table");
+
+// ---------------------------------------------------------------------------
+// Which scenes are in the rotation
+// ---------------------------------------------------------------------------
+// Both the on/off flag and the dwell are the owner's, from the settings page.
+// The dwellMs in the table above is now only a default for a device that has
+// never saved.
+
+// Turning every scene off would leave the panel frozen on whatever was drawn
+// last, with no way back except a settings page it can no longer tell you the
+// address of. The form rejects it, and this makes it unreachable even if a
+// stored record says otherwise.
+static bool anySceneOn() {
+  for (int i = 0; i < SCENE_COUNT; i++) if (g_settings.sceneOn[i]) return true;
+  return false;
+}
+
+static bool sceneOn(int i) {
+  if (i < 0 || i >= SCENE_COUNT) return false;
+  return anySceneOn() ? g_settings.sceneOn[i] : (i == 0);
+}
+
+static uint32_t sceneDwellMs(int i) {
+  const uint16_t s = g_settings.sceneDwellS[i];
+  return s ? (uint32_t)s * 1000UL : scenes[i].dwellMs;
+}
+
+// Next scene in the rotation, skipping the ones switched off. Returns `from`
+// unchanged when it is the only one left, which is what makes a single-scene
+// configuration hold still rather than flicker.
+static int nextScene(int from) {
+  for (int n = 1; n <= SCENE_COUNT; n++) {
+    const int i = (from + n) % SCENE_COUNT;
+    if (sceneOn(i)) return i;
+  }
+  return from;
+}
+
+static int firstScene() {
+  for (int i = 0; i < SCENE_COUNT; i++) if (sceneOn(i)) return i;
+  return 0;
+}
+
 static int      curIdx      = 0;
 static uint32_t enterMs     = 0;
 static bool     pinned      = false;
@@ -1024,7 +1071,7 @@ static void goToScene(int idx) {
 }
 
 void sceneManager_begin() {
-  curIdx = 0;
+  curIdx = firstScene();
   pinned = false;
   freezeUntil = 0;
   scenes[curIdx].onEnter();
@@ -1041,7 +1088,7 @@ void sceneManager_handleTouch(TouchEvent ev) {
       // The DESTINATION's freeze, not the current scene's -- which is why `next`
       // is computed first. This used to set freezeUntil before goToScene, which
       // was only ever safe because the value was one global constant.
-      const int next = (curIdx + 1) % SCENE_COUNT;
+      const int next = nextScene(curIdx);
       const uint32_t freeze = scenes[next].freezeMs ? scenes[next].freezeMs
                                                     : SCENE_FREEZE_MS;
       freezeUntil = millis() + freeze;
@@ -1073,11 +1120,32 @@ void sceneManager_tick() {
   if (pinned) return;
   if ((int32_t)(millis() - freezeUntil) < 0) return;
 
-  if (millis() - enterMs >= s.dwellMs) goToScene((curIdx + 1) % SCENE_COUNT);
+  if (millis() - enterMs >= sceneDwellMs(curIdx)) {
+    const int next = nextScene(curIdx);
+    if (next != curIdx) goToScene(next);
+    else enterMs = millis();   // sole scene: restart the dwell, do not re-enter
+  }
 }
 
-int  sceneManager_index()  { return curIdx; }
-int  sceneManager_count()  { return SCENE_COUNT; }
+// Both report the ROTATION, not the table: the status strip draws one dot per
+// scene you will actually see, so a switched-off scene must not leave a gap.
+int sceneManager_count() {
+  int n = 0;
+  for (int i = 0; i < SCENE_COUNT; i++) if (sceneOn(i)) n++;
+  return n ? n : 1;
+}
+
+int sceneManager_index() {
+  int n = 0;
+  for (int i = 0; i < curIdx; i++) if (sceneOn(i)) n++;
+  return n;
+}
+int sceneManager_total() { return SCENE_COUNT; }
+
+const char* sceneManager_name(int tableIndex) {
+  return (tableIndex >= 0 && tableIndex < SCENE_COUNT) ? scenes[tableIndex].name : "";
+}
+
 bool sceneManager_isPinned() { return pinned; }
 bool sceneManager_isFrozen() {
   return !pinned && (int32_t)(millis() - freezeUntil) < 0;

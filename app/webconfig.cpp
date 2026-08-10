@@ -1,6 +1,7 @@
 #include "webconfig.h"
 #include "settings.h"
 #include "labels.h"
+#include "scenes.h"
 #include "bus_js.h"
 #include <mbedtls/base64.h>
 
@@ -97,6 +98,11 @@ static const char PAGE_HEAD[] PROGMEM =
   ".radio input{width:auto}"
   ".err{background:#5a1a1a;border:1px solid #a33;padding:10px;border-radius:6px;"
   "margin-bottom:14px;font-size:14px}"
+  ".srow{display:flex;align-items:center;gap:10px;margin:8px 0}"
+  ".schk{flex:1;display:flex;align-items:center;gap:8px;margin:0;color:#eee;font-size:15px}"
+  ".schk input{width:auto;flex:none}"
+  ".sdw{color:#888;font-size:13px;white-space:nowrap}"
+  ".sdw input{width:64px;display:inline-block;text-align:right;margin-right:3px}"
   ".slot{border-top:1px solid #2a2a2a;padding-top:6px;margin-top:10px}"
   ".slot:first-of-type{border-top:0;margin-top:0}"
   ".bsum{color:#0dd;font-size:13px;margin:2px 0 6px;word-break:break-all}"
@@ -143,9 +149,15 @@ static void sendPage(const String& error = String()) {
   h.reserve(8192);
   h += FPSTR(PAGE_HEAD);
 
+  // True only when re-rendering a rejected POST. Checkboxes need it: an
+  // unticked box is simply absent from the body, which is indistinguishable
+  // from a fresh GET unless something says a form was submitted at all.
+  const bool posted = server.hasArg("posted");
+
   if (error.length()) { h += F("<div class=err>"); h += esc(error); h += F("</div>"); }
 
-  h += F("<form method=POST action=/save>");
+  h += F("<form method=POST action=/save>"
+         "<input type=hidden name=posted value=1>");
 
   // --- WiFi
   h += F("<fieldset><legend>WiFi</legend><label>Network (2.4 GHz only)</label>"
@@ -204,43 +216,100 @@ static void sendPage(const String& error = String()) {
   h += imperial ? F(" checked>") : F(">");
   h += F("Imperial (&deg;F, mph, inHg)</label></div></fieldset>");
 
+  // --- Scenes
+  //
+  // Which screens appear, and for how long. Both belong to the owner: somebody
+  // who never looks at air quality should not have to re-flash to stop it
+  // coming round, which is the same argument that moved WiFi credentials out
+  // of config.h.
+  h += F("<fieldset><legend>Screens</legend>");
+  for (int i = 0; i < sceneManager_total() && i < SCENE_SLOTS; i++) {
+    // An unchecked checkbox is not submitted at all, so on a re-render after a
+    // validation error the absence of `sc<i>` is the user's "off" -- but on a
+    // fresh GET the same absence means nothing. `posted` tells the two apart.
+    const bool on = posted ? server.hasArg(String("sc") + i) : g_settings.sceneOn[i];
+    h += F("<div class=srow><label class=schk><input type=checkbox name=sc");
+    h += String(i);
+    h += on ? F(" checked>") : F(">");
+    h += sceneManager_name(i);
+    h += F("</label><span class=sdw><input type=number name=sd");
+    h += String(i);
+    h += F(" min="); h += String(SCENE_DWELL_MIN_S);
+    h += F(" max="); h += String(SCENE_DWELL_MAX_S);
+    h += F(" value=\"");
+    h += esc(field((String("sd") + i).c_str(), String(g_settings.sceneDwellS[i])));
+    h += F("\">s</span></div>");
+  }
+  h += F("<div class=hint>Unticked screens are skipped by the rotation and lose "
+         "their dot in the status bar; their timing is remembered for when you "
+         "tick them again. At least one has to stay on. A tap still advances to "
+         "the next screen, and a long press pins the one you are looking at.</div>"
+         "</fieldset>");
+
   // --- Bus stops
   //
   // Structured so the page is fully usable with no JavaScript at all: each slot
   // is a plain text input holding the packed string, and /bus.js later hangs a
   // route picker above it that writes into the very same field. That is not a
-  // fallback bolted on afterwards -- it is the primary contract, which is why
-  // the picker can be dead (AP mode has no internet, by construction) and
-  // saving still preserves every configured stop.
-  h += F("<fieldset><legend>Next bus (Hong Kong)</legend>"
-         "<div class=hint id=bne></div>");
-  for (int i = 0; i < BUS_SLOTS; i++) {
-    char nm[8];
-    snprintf(nm, sizeof(nm), "bus%d", i);
-    const String cur = field(nm, busStop_pack(g_settings.buses[i]));
+  // fallback bolted on afterwards -- it is the primary contract.
+  //
+  // In AP mode the whole section is hidden, because the device IS the access
+  // point and has no route to the internet: every lookup would fail and every
+  // name would bake against a stop the browser could not resolve. But the
+  // values are still carried, as hidden inputs -- dropping the fields entirely
+  // would make an ordinary save from the setup portal erase every stop the user
+  // had configured, which is a far worse outcome than a section they cannot use.
+  if (apMode) {
+    for (int i = 0; i < BUS_SLOTS; i++) {
+      char nm[8];
+      snprintf(nm, sizeof(nm), "bus%d", i);
+      h += F("<input type=hidden name=");
+      h += nm;
+      h += F(" value=\"");
+      h += esc(field(nm, busStop_pack(g_settings.buses[i])));
+      h += F("\">");
+    }
+    int configured = 0;
+    for (int i = 0; i < BUS_SLOTS; i++) if (g_settings.buses[i].valid()) configured++;
+    if (configured) {
+      h += F("<fieldset><legend>Next bus (Hong Kong)</legend><div class=hint>");
+      h += String(configured);
+      h += F(" stop(s) configured, and they are kept. Route lookup needs "
+             "internet access, which this setup network does not have &mdash; "
+             "reconnect the clock to your WiFi and open its settings page there "
+             "to change them.</div></fieldset>");
+    }
+  } else {
+    h += F("<fieldset><legend>Next bus (Hong Kong)</legend>"
+           "<div class=hint id=bne></div>");
+    for (int i = 0; i < BUS_SLOTS; i++) {
+      char nm[8];
+      snprintf(nm, sizeof(nm), "bus%d", i);
+      const String cur = field(nm, busStop_pack(g_settings.buses[i]));
 
-    h += F("<div class=slot><label>Stop ");
-    h += String(i + 1);
-    h += F("</label><div class=bsum id=bsum");
-    h += String(i);
-    h += F(">");
-    h += esc(busStop_describe(g_settings.buses[i]));
-    h += F("</div><div id=bpick");
-    h += String(i);
-    h += F("></div><details><summary>Manual entry</summary><input name=");
-    h += nm;
-    h += F(" id=");
-    h += nm;
-    h += F(" value=\"");
-    h += esc(cur);
-    h += F("\"><div class=hint>op|route|stop|serviceType|dir|routeId|routeSeq|"
-           "stopSeq|stopTC|stopEN|destTC|destEN &mdash; op 0=KMB 1=Citybus "
-           "2=minibus 3=Long Win. Empty clears the slot.</div></details></div>");
+      h += F("<div class=slot><label>Stop ");
+      h += String(i + 1);
+      h += F("</label><div class=bsum id=bsum");
+      h += String(i);
+      h += F(">");
+      h += esc(busStop_describe(g_settings.buses[i]));
+      h += F("</div><div id=bpick");
+      h += String(i);
+      h += F("></div><details><summary>Manual entry</summary><input name=");
+      h += nm;
+      h += F(" id=");
+      h += nm;
+      h += F(" value=\"");
+      h += esc(cur);
+      h += F("\"><div class=hint>op|route|stop|serviceType|dir|routeId|routeSeq|"
+             "stopSeq|stopTC|stopEN|destTC|destEN &mdash; op 0=KMB 1=Citybus "
+             "2=minibus 3=Long Win. Empty clears the slot.</div></details></div>");
+    }
+    h += F("<div class=hint>Chinese stop names are drawn on the display as images "
+           "baked by this browser, because the device has no Chinese font. If the "
+           "names ever revert to English, open this page and save again to "
+           "restore them.</div></fieldset>");
   }
-  h += F("<div class=hint>Chinese stop names are drawn on the display as images "
-         "baked by this browser, because the device has no Chinese font. If you "
-         "re-flash the firmware the names revert to English &mdash; open this "
-         "page and save again to restore them.</div></fieldset>");
 
   h += FPSTR(PAGE_TAIL);
   const size_t len = h.length();
@@ -314,9 +383,18 @@ static void handleSave() {
   // IS the proof the id resolves -- and the scene's 檢查車站 state catches the
   // rest by watching a slot return nothing for six hours.
   BusStop parsed[BUS_SLOTS];
+  bool busPresent[BUS_SLOTS] = {};
   for (int i = 0; i < BUS_SLOTS && err.isEmpty(); i++) {
     char nm[8];
     snprintf(nm, sizeof(nm), "bus%d", i);
+    // ABSENT and EMPTY are not the same thing. An empty field is the user
+    // clearing the slot; an absent one means the form did not carry it, and
+    // treating that as "clear" would let any save from a page that omitted the
+    // section wipe every configured stop. The AP-mode page carries them as
+    // hidden inputs so they are always present -- this is the belt to that
+    // braces, and it is cheap.
+    if (!server.hasArg(nm)) continue;
+    busPresent[i] = true;
     String v = server.arg(nm);
     v.trim();
     if (v.isEmpty()) continue;                       // an empty field clears it
@@ -324,9 +402,31 @@ static void handleSave() {
       err = String(F("Stop ")) + String(i + 1) + F(" is not a valid entry.");
   }
 
+  // Scenes. Rejecting an all-off configuration here rather than coping with it
+  // at runtime: a panel with no scene left to show would sit frozen on whatever
+  // was drawn last, and the address of the page that could undo it is itself
+  // painted by a scene.
+  bool     scOn[SCENE_SLOTS];
+  uint16_t scDwell[SCENE_SLOTS];
+  int      scOnCount = 0;
+  for (int i = 0; i < SCENE_SLOTS; i++) {
+    scOn[i] = server.hasArg(String("sc") + i);
+    if (scOn[i]) scOnCount++;
+    const long v = server.arg(String("sd") + i).toInt();
+    scDwell[i] = (v >= SCENE_DWELL_MIN_S && v <= SCENE_DWELL_MAX_S)
+                   ? (uint16_t)v : g_settings.sceneDwellS[i];
+    if (err.isEmpty() && v != 0 &&
+        (v < SCENE_DWELL_MIN_S || v > SCENE_DWELL_MAX_S))
+      err = String(F("Screen times must be between ")) + SCENE_DWELL_MIN_S
+          + F(" and ") + SCENE_DWELL_MAX_S + F(" seconds.");
+  }
+  if (err.isEmpty() && scOnCount == 0)
+    err = F("At least one screen has to stay switched on.");
+
   if (err.length()) { sendPage(err); return; }
 
   for (int i = 0; i < BUS_SLOTS; i++) {
+    if (!busPresent[i]) continue;            // not on this form; leave it alone
     // The baked bitmap is a picture of exactly these two strings. If either
     // changed and the browser did not upload a replacement, the old picture is
     // now a picture of a different stop -- worse than no picture at all.
@@ -334,6 +434,11 @@ static void handleSave() {
                              (parsed[i].destTc != g_settings.buses[i].destTc);
     if (textChanged && !labelUploaded[i]) label_clearUser(i);
     g_settings.buses[i] = parsed[i];
+  }
+
+  for (int i = 0; i < SCENE_SLOTS; i++) {
+    g_settings.sceneOn[i]     = scOn[i];
+    g_settings.sceneDwellS[i] = scDwell[i];
   }
 
   g_settings.wifiSsid  = ssid;

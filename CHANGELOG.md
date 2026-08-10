@@ -25,15 +25,28 @@
     `tools/gen_zh_labels.py` (2.5 KB), and your stop names are baked by your
     browser and stored on LittleFS. See `docs/decisions.md`.
   - **Route lookup happens in the browser**, so only resolved stop ids reach the
-    device. The settings page still works with the lookup dead — each slot is a
-    plain text field with the picker layered on top, which is what makes saving
-    from the offline setup AP preserve your stops rather than erase them.
+    device. Each slot is a plain text field with the picker layered on top, not
+    the other way round, so the section still works if the lookup is unavailable
+    and "Manual entry" is a permanent escape hatch rather than a debug tool.
   - The label preview on the settings page shows the **actual 1-bit result** at
     real size, and the text is editable: operator stop names are written for a
     route database, not a wall.
 
+- **Screens can be switched off, and each one's time on screen adjusted**, from
+  a new *Screens* section on the settings page. Untick a screen and the rotation
+  skips it and it loses its dot in the status bar; its timing is remembered for
+  when you tick it back on. At least one has to stay on — the form refuses
+  otherwise, because a panel with no screen left to draw would sit frozen
+  showing an address it could no longer print.
+
 ### Fixed
 
+- **Saving from the setup AP no longer risks erasing your bus stops.** The bus
+  section is hidden in AP mode, since the device *is* the access point and has
+  no route to the internet, so every route lookup would fail. The values are
+  still carried as hidden fields, and `handleSave` now distinguishes a field
+  that was *absent* from one the user *cleared* — previously an absent field
+  read as an empty string and cleared the slot.
 - **The settings page no longer discards what you typed when a save is
   rejected.** A validation error repopulated every field from the last *saved*
   values instead of the submitted ones. (The password field is deliberately

@@ -562,7 +562,13 @@ static const char BUS_JS[] PROGMEM = R"JS(
   // AP mode has no route to the internet BY CONSTRUCTION -- the device is the
   // access point. Saying so matters: a first-time user who sees the picker fail
   // will otherwise conclude the whole setup is broken.
+  // In AP mode the whole bus section is omitted server-side, so there is
+  // nothing here to drive and -- more to the point -- nothing to probe the
+  // network for. Bailing out is what keeps this script from firing a doomed
+  // request every time somebody opens the setup portal.
   var note = document.getElementById('bne');
+  if (!note) return;
+
   jget(GMB + 'route/HKI/1').then(function () {
     note.textContent = 'Pick a route below, or type the packed value under "Manual entry".';
   }, function () {

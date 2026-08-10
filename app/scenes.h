@@ -34,8 +34,17 @@ struct Scene {
 
 void sceneManager_begin();   // enter the first scene
 void sceneManager_tick();    // call every loop; ticks + advances on dwell
-int  sceneManager_index();   // current scene index
-int  sceneManager_count();   // total scenes
+
+// These two describe the ROTATION -- scenes switched off on the settings page
+// are not counted and not indexed, so the status strip draws one dot per screen
+// you will actually see.
+int  sceneManager_index();
+int  sceneManager_count();
+
+// These two describe the TABLE, switched off or not. The settings page needs
+// them to label its checkboxes; nothing else should care.
+int         sceneManager_total();
+const char* sceneManager_name(int tableIndex);
 
 // Feed a gesture in. TOUCH_NONE is ignored, so this is safe to call every loop.
 void sceneManager_handleTouch(TouchEvent ev);

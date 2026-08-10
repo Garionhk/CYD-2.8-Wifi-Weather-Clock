@@ -99,6 +99,47 @@ bool busStop_unpack(const String& packed, BusStop& out) {
   return out.valid();
 }
 
+// ---------------------------------------------------------------------------
+// Scene rotation
+// ---------------------------------------------------------------------------
+// Two short strings rather than ten keys: "10111" and "35,12,12,12,60". Keeping
+// the dwell for a scene that is switched off is deliberate -- turning Air
+// Quality back on should restore the timing you chose for it, not reset it.
+
+static String scenesPackOn() {
+  String o;
+  for (int i = 0; i < SCENE_SLOTS; i++) o += g_settings.sceneOn[i] ? '1' : '0';
+  return o;
+}
+
+static String scenesPackDwell() {
+  String o;
+  for (int i = 0; i < SCENE_SLOTS; i++) {
+    if (i) o += ',';
+    o += String((unsigned)g_settings.sceneDwellS[i]);
+  }
+  return o;
+}
+
+// A stored record shorter than SCENE_SLOTS -- which is what a device saved
+// before a scene was added will have -- leaves the extra entries at their
+// compiled defaults rather than at zero.
+static void scenesUnpack(const String& on, const String& dwell) {
+  for (int i = 0; i < SCENE_SLOTS && i < (int)on.length(); i++)
+    g_settings.sceneOn[i] = (on[i] != '0');
+
+  int start = 0;
+  for (int i = 0; i < SCENE_SLOTS && start <= (int)dwell.length(); i++) {
+    const int end = dwell.indexOf(',', start);
+    const String tok = (end < 0) ? dwell.substring(start) : dwell.substring(start, end);
+    const long v = tok.toInt();
+    if (v >= SCENE_DWELL_MIN_S && v <= SCENE_DWELL_MAX_S)
+      g_settings.sceneDwellS[i] = (uint16_t)v;
+    if (end < 0) break;
+    start = end + 1;
+  }
+}
+
 String busStop_describe(const BusStop& b) {
   if (!b.valid()) return String("(unset)");
   static const char* NAMES[] = { "KMB", "CTB", "GMB", "LWB" };
@@ -139,6 +180,8 @@ void settings_begin() {
       snprintf(key, sizeof(key), "bus%d", i);
       busStop_unpack(prefs.getString(key, String()), g_settings.buses[i]);
     }
+    scenesUnpack(prefs.getString("scOn",    scenesPackOn()),
+                 prefs.getString("scDwell", scenesPackDwell()));
     g_settings.provisioned = true;
   }
   prefs.end();
@@ -155,6 +198,9 @@ void settings_begin() {
 
   for (int i = 0; i < BUS_SLOTS; i++)
     Serial.printf("settings: bus%d %s\n", i, busStop_describe(g_settings.buses[i]).c_str());
+
+  Serial.printf("settings: scenes on %s  dwell %s\n",
+                scenesPackOn().c_str(), scenesPackDwell().c_str());
 }
 
 bool settings_save() {
@@ -170,6 +216,8 @@ bool settings_save() {
     snprintf(key, sizeof(key), "bus%d", i);
     prefs.putString(key, busStop_pack(g_settings.buses[i]));   // "" when unset
   }
+  prefs.putString("scOn",    scenesPackOn());
+  prefs.putString("scDwell", scenesPackDwell());
   prefs.putBool  ("ok",    true);        // written last: a half-written record
   prefs.end();                           // must not read back as valid
   g_settings.provisioned = true;
