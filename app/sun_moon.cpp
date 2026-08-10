@@ -1,5 +1,5 @@
 #include "sun_moon.h"
-#include "config.h"
+#include "settings.h"
 #include "app_data.h"
 #include <Arduino.h>
 #include <math.h>
@@ -46,13 +46,16 @@ time_t sunEventUTC(int y, int m, int d, double elevDeg, bool morning) {
       - 0.5 * yv * yv * sin(4 * deg2rad(L0))
       - 1.25 * e * e * sin(2 * Mr));
 
+  const double lat = g_settings.latitude;
+  const double lon = g_settings.longitude;
+
   double zenith = 90.0 - elevDeg;
-  double cosH = (cos(deg2rad(zenith)) - sin(deg2rad(LATITUDE)) * sin(deg2rad(delta)))
-              / (cos(deg2rad(LATITUDE)) * cos(deg2rad(delta)));
+  double cosH = (cos(deg2rad(zenith)) - sin(deg2rad(lat)) * sin(deg2rad(delta)))
+              / (cos(deg2rad(lat)) * cos(deg2rad(delta)));
   if (cosH > 1.0 || cosH < -1.0) return 0;    // sun never reaches this elevation
 
   double H = rad2deg(acos(cosH));
-  double minutesUTC = 720.0 - 4.0 * (LONGITUDE + (morning ? H : -H)) - eqTime;
+  double minutesUTC = 720.0 - 4.0 * (lon + (morning ? H : -H)) - eqTime;
   double midnightUTCepoch = (JD - 2440587.5) * 86400.0;
   return (time_t)llround(midnightUTCepoch + minutesUTC * 60.0);
 }

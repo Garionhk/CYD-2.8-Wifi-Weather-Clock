@@ -2,6 +2,47 @@
 
 ## Unreleased
 
+### Added
+
+- **Settings are configured from a web page, not `config.h`.** WiFi, location,
+  timezone and units now live in NVS and are set from a page the device serves
+  itself. Nothing user-specific is compiled in any more, so **the built binary
+  can be shared** — `strings app.bin` used to print the author's WiFi password.
+  - The server runs in both modes: on the LAN IP when connected, and as a
+    `CYD-Setup-XXXX` SoftAP with a DNS captive portal when it can't connect.
+  - **The clock screen prints the settings address** in a dim footer under the
+    date. A settings page nobody can find is not a feature.
+  - A failed connection stays non-fatal, as it always has been. The setup AP
+    comes up *alongside* a working offline clock (`WIFI_AP_STA`) and is dropped
+    automatically once the real network returns.
+  - This covers WiFi lost **at runtime**, not just at boot: after two minutes
+    without a connection the setup AP is raised on its own, so replacing a
+    router or changing its password never requires a power cycle to reach the
+    settings page. The delay stops an ordinary router reboot from flapping it.
+  - **Holding a finger on the panel through boot forces setup** — the recovery
+    path for a device joined to a network that no longer exists.
+  - The first-run portal deliberately has no timeout, unlike the calibration
+    wizard. See `docs/decisions.md` for why that is not a violation of the
+    appliance rule.
+  - The page never sends a stored password back to the browser; leaving the
+    field blank keeps the current one.
+
+### Changed
+
+- **Partition scheme is now `huge_app`**, set as the default `FQBN` in
+  `build_all.sh` and `flash.sh`. The web UI pushes the app to ~1.22 MB against
+  the default scheme's 1.31 MB slot (93% full); `huge_app` gives it 3 MB (38%)
+  by dropping the second OTA slot, which is already a non-goal. `nvs` sits at the
+  same offset in both schemes, so stored settings and touch calibration survive
+  the switch. **An `FQBN` override must now carry `PartitionScheme=huge_app`.**
+- `units.h` reads the units setting at runtime instead of folding a compile-time
+  constant. The branch is irrelevant next to the SPI writes each call feeds.
+- `tools/sync_shared.sh` no longer syncs `config.h` — only `board.h`.
+
+### Removed
+
+- `config.h`, `config/config.example.h` and the generated per-sketch copies.
+
 ### Security
 
 - **`config.h` is no longer tracked by git.** The repo had no `.gitignore` at

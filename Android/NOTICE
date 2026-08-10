@@ -1,0 +1,41 @@
+CYD Clock & Weather Station -- Android
+Copyright 2026
+
+This product includes bitmap font data derived from TFT_eSPI
+(https://github.com/Bodmer/TFT_eSPI), Copyright (c) 2023 Bodmer, released
+under the FreeBSD License.
+
+The glyph tables in app/src/main/assets/fonts/ were extracted from TFT_eSPI's
+Fonts/Font16.c, Font32rle.c, Font64rle.c and Font72rle.c by
+tools/extract_tft_fonts.py. The data is unmodified; only the container format
+changed, from C arrays to a flat binary the app can mmap.
+
+Those fonts in turn derive from the Adafruit GFX Library, Copyright (c) 2012
+Adafruit Industries, released under the BSD License.
+
+Weather and air quality data come from Open-Meteo (https://open-meteo.com),
+licensed CC BY 4.0.
+
+--------------------------------------------------------------------------
+
+FreeBSD License (TFT_eSPI)
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS" AND
+ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
