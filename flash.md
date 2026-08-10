@@ -92,6 +92,49 @@ headroom.
 `--export-binaries` is what writes these into the sketch folder; without it
 arduino-cli builds into a temporary directory and throws the result away.
 
+### The merged image at `0x0` is a factory reset — settings and all
+
+Worth being precise about, because it is easy to assume otherwise. The merged
+file is a **full 4 MB image**: the gaps between the four real segments are
+padded with `0xFF`, and that padding covers the NVS partition at `0x9000` and
+the LittleFS partition at `0x310000`. Writing it at `0x0` erases both.
+
+```
+$ python3 -c "d=open('cyd-clock-weather-v1.0.0-4mb.bin','rb').read(); \
+              print(len(d), set(d[0x9000:0x9040]), set(d[0x310000:0x310040]))"
+4194304 {255} {255}
+```
+
+So flashing the merged image wipes **WiFi credentials, location, timezone,
+units, your configured bus stops, the touch calibration, and the baked Chinese
+labels**. The device comes up in the setup portal and runs the touch wizard, as
+if new. That is the right behaviour for the file you hand to someone else — it
+is what makes it a clean install — but it is not an upgrade path.
+
+**To update firmware and keep everything, upload the application only:**
+
+```bash
+./tools/flash.sh app
+```
+
+`arduino-cli upload` writes the bootloader, partition table, OTA selector and
+application at their own offsets and never touches `0x9000` or `0x310000`, so
+settings, calibration and labels all survive.
+
+### If the Chinese stop names come back as English
+
+The device has no CJK font. Stop names and destinations are rendered to 1-bit
+images by your browser and stored on LittleFS (see `docs/decisions.md`); the
+stop *text* lives in NVS in both languages. When the image is missing the bus
+scene draws the English name in the built-in font rather than going blank —
+which is what you will see if the filesystem was erased or was never written
+(for example, a stop added by hand through "Manual entry", or a save made while
+the browser had no internet).
+
+The fix is one step: open the settings page and press **Save & restart**. The
+browser re-bakes and re-uploads the labels. You do not need to pick the routes
+again.
+
 If you have the source checked out and just want to flash your own board,
 `./tools/flash.sh app` does compile, upload and serial monitor in one step, and
 already defaults to the right FQBN.

@@ -4,6 +4,49 @@
 
 ### Added
 
+- **A fifth scene: 下一班車 / Next Bus.** The next Hong Kong bus or minibus at up
+  to three stops, in Traditional Chinese, with a coloured route badge that
+  slides toward the stop as the vehicle approaches. Two large rows so it reads
+  from across a room; three configured stops page between two screens every 8 s.
+  Tapping to it holds the rotation for 60 s instead of 45.
+  - **KMB/LWB, Citybus and green minibus**, which are three genuinely different
+    API models rather than one with a parameter. Direction filtering is done
+    client-side for the first two — a stop served both ways returns rows for
+    both — and the serial log prints the drop count, because a broken filter is
+    invisible at a one-direction stop.
+  - **ETAs are stored as absolute epoch times**, and the countdown is recomputed
+    every second. So a five-minute-old fetch still shows the right number, and
+    unplugging the router leaves the display counting down correctly with only
+    the header's freshness changing colour.
+  - **Chinese without a CJK font.** TFT_eSPI has none, and an embedded one costs
+    1.35 MB at a size too small to read (2.04 MB at a size that isn't, which
+    does not fit). Instead the ~18 fixed words are baked at build time by
+    `tools/gen_zh_labels.py` (2.5 KB), and your stop names are baked by your
+    browser and stored on LittleFS. See `docs/decisions.md`.
+  - **Route lookup happens in the browser**, so only resolved stop ids reach the
+    device. The settings page still works with the lookup dead — each slot is a
+    plain text field with the picker layered on top, which is what makes saving
+    from the offline setup AP preserve your stops rather than erase them.
+  - The label preview on the settings page shows the **actual 1-bit result** at
+    real size, and the text is editable: operator stop names are written for a
+    route database, not a wall.
+
+### Fixed
+
+- **The settings page no longer discards what you typed when a save is
+  rejected.** A validation error repopulated every field from the last *saved*
+  values instead of the submitted ones. (The password field is deliberately
+  excluded — it renders as a placeholder, and echoing it would put the WiFi
+  password in the page source.)
+- **`flash.md` was wrong about what a reflash keeps.** `app.ino.merged.bin` is a
+  full 4 MB image whose padding covers the NVS and filesystem partitions, so
+  flashing it at `0x0` is a factory reset — settings, touch calibration and all.
+  `./tools/flash.sh app` uploads only the application and preserves them. The
+  two are now documented as the different operations they are.
+- Scene-position dots in the status strip were pitched 16 px apart, which left
+  the fifth dot 4 px from the pause glyph and would have overlapped at six. Now
+  13 px, with 16 px of clearance.
+
 - **Settings are configured from a web page, not `config.h`.** WiFi, location,
   timezone and units now live in NVS and are set from a page the device serves
   itself. Nothing user-specific is compiled in any more, so **the built binary

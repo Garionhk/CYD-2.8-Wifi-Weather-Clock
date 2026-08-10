@@ -1,5 +1,8 @@
 #include "webconfig.h"
 #include "settings.h"
+#include "labels.h"
+#include "bus_js.h"
+#include <mbedtls/base64.h>
 
 #include <WiFi.h>
 #include <WebServer.h>
@@ -94,6 +97,13 @@ static const char PAGE_HEAD[] PROGMEM =
   ".radio input{width:auto}"
   ".err{background:#5a1a1a;border:1px solid #a33;padding:10px;border-radius:6px;"
   "margin-bottom:14px;font-size:14px}"
+  ".slot{border-top:1px solid #2a2a2a;padding-top:6px;margin-top:10px}"
+  ".slot:first-of-type{border-top:0;margin-top:0}"
+  ".bsum{color:#0dd;font-size:13px;margin:2px 0 6px;word-break:break-all}"
+  "details summary{color:#888;font-size:12px;cursor:pointer;margin-top:6px}"
+  ".bpick select{margin-bottom:6px}"
+  ".prev{background:#000;border:1px solid #333;border-radius:4px;margin-top:6px;"
+  "image-rendering:pixelated;max-width:100%}"
   "</style></head><body><div class=w>"
   "<h1>CYD Clock &amp; Weather</h1>"
   "<p class=sub>Settings are stored on the device. Saving restarts it.</p>";
@@ -107,11 +117,30 @@ static const char PAGE_TAIL[] PROGMEM =
   "n.forEach(function(s){var o=document.createElement('option');o.value=s;d.appendChild(o)});"
   "m.textContent=n.length?n.length+' found - tap the field above to pick one':'none found';"
   "}).catch(function(){m.textContent='Scan failed'})}"
-  "</script></div></body></html>";
+  "</script><script src=/bus.js defer></script></div></body></html>";
+
+// What a field should show when the page is rendered.
+//
+// handleSave() calls sendPage(err) synchronously, while the POST body is still
+// parsed, so the value the user actually typed is available -- and until now it
+// was thrown away, because sendPage repopulated everything from g_settings. A
+// rejected save silently reverted the form. That was survivable with four
+// fields; after three bus drill-downs it would be infuriating.
+//
+// NOT used for `pass`, and that is deliberate: the password field renders as a
+// placeholder rather than a value (see below), and echoing it back would put
+// the WiFi password in the page source.
+static String field(const char* name, const String& fallback) {
+  return server.hasArg(name) ? server.arg(name) : fallback;
+}
 
 static void sendPage(const String& error = String()) {
   String h;
-  h.reserve(6000);
+  // ~4.7-5.0 KB before the bus fieldset, which adds ~1.5-2 KB. A power of two
+  // so the allocator can reuse the block rather than fragmenting a fresh one --
+  // this String is built inside loop(), interleaved with clockEnter's 10 KB
+  // contiguous sprite allocation, and that is the pairing that hurts.
+  h.reserve(8192);
   h += FPSTR(PAGE_HEAD);
 
   if (error.length()) { h += F("<div class=err>"); h += esc(error); h += F("</div>"); }
@@ -121,7 +150,7 @@ static void sendPage(const String& error = String()) {
   // --- WiFi
   h += F("<fieldset><legend>WiFi</legend><label>Network (2.4 GHz only)</label>"
          "<input name=ssid list=nets required value=\"");
-  h += esc(g_settings.wifiSsid);
+  h += esc(field("ssid", g_settings.wifiSsid));
   h += F("\"><datalist id=nets></datalist>"
          "<button type=button class=sec onclick=scan()>Scan for networks</button>"
          "<div class=hint id=sm></div>"
@@ -135,10 +164,10 @@ static void sendPage(const String& error = String()) {
   h += F("<fieldset><legend>Location</legend><div class=row>"
          "<div><label>Latitude</label>"
          "<input name=lat type=number step=any min=-90 max=90 required value=\"");
-  h += String(g_settings.latitude, 4);
+  h += esc(field("lat", String(g_settings.latitude, 4)));
   h += F("\"></div><div><label>Longitude</label>"
          "<input name=lon type=number step=any min=-180 max=180 required value=\"");
-  h += String(g_settings.longitude, 4);
+  h += esc(field("lon", String(g_settings.longitude, 4)));
   h += F("\"></div></div><div class=hint>Decimal degrees. Longitude is negative "
          "west of Greenwich, so everywhere in the Americas is negative. "
          "Right-click your location in Google Maps to copy the pair. "
@@ -146,9 +175,10 @@ static void sendPage(const String& error = String()) {
 
   // --- Time zone
   h += F("<fieldset><legend>Time zone</legend><label>Zone</label><select name=tzsel>");
+  const String tzsel = field("tzsel", g_settings.tz);
   bool matched = false;
   for (int i = 0; i < TZ_COUNT; i++) {
-    const bool sel = (g_settings.tz == TZ_OPTIONS[i].tz);
+    const bool sel = (tzsel == TZ_OPTIONS[i].tz);
     if (sel) matched = true;
     h += F("<option value=\"");
     h += TZ_OPTIONS[i].tz;
@@ -158,30 +188,86 @@ static void sendPage(const String& error = String()) {
   }
   h += F("</select><label>Or a custom POSIX TZ string</label>"
          "<input name=tzcustom placeholder=\"e.g. PST8PDT,M3.2.0,M11.1.0\" value=\"");
-  if (!matched) h += esc(g_settings.tz);   // keep a custom value visible
+  h += esc(field("tzcustom", matched ? String() : g_settings.tz));
   h += F("\"><div class=hint>Currently <b>");
   h += esc(g_settings.tz);
   h += F("</b>. A custom value overrides the dropdown. These are POSIX strings, "
          "not names like Europe/London.</div></fieldset>");
 
   // --- Units
+  const bool imperial = field("units", String(g_settings.units)).toInt() == UNITS_IMPERIAL;
   h += F("<fieldset><legend>Units</legend><div class=radio>"
          "<label><input type=radio name=units value=0");
-  h += (g_settings.units == UNITS_METRIC) ? F(" checked>") : F(">");
+  h += imperial ? F(">") : F(" checked>");
   h += F("Metric (&deg;C, km/h, hPa)</label>"
          "<label><input type=radio name=units value=1");
-  h += (g_settings.units == UNITS_IMPERIAL) ? F(" checked>") : F(">");
+  h += imperial ? F(" checked>") : F(">");
   h += F("Imperial (&deg;F, mph, inHg)</label></div></fieldset>");
 
+  // --- Bus stops
+  //
+  // Structured so the page is fully usable with no JavaScript at all: each slot
+  // is a plain text input holding the packed string, and /bus.js later hangs a
+  // route picker above it that writes into the very same field. That is not a
+  // fallback bolted on afterwards -- it is the primary contract, which is why
+  // the picker can be dead (AP mode has no internet, by construction) and
+  // saving still preserves every configured stop.
+  h += F("<fieldset><legend>Next bus (Hong Kong)</legend>"
+         "<div class=hint id=bne></div>");
+  for (int i = 0; i < BUS_SLOTS; i++) {
+    char nm[8];
+    snprintf(nm, sizeof(nm), "bus%d", i);
+    const String cur = field(nm, busStop_pack(g_settings.buses[i]));
+
+    h += F("<div class=slot><label>Stop ");
+    h += String(i + 1);
+    h += F("</label><div class=bsum id=bsum");
+    h += String(i);
+    h += F(">");
+    h += esc(busStop_describe(g_settings.buses[i]));
+    h += F("</div><div id=bpick");
+    h += String(i);
+    h += F("></div><details><summary>Manual entry</summary><input name=");
+    h += nm;
+    h += F(" id=");
+    h += nm;
+    h += F(" value=\"");
+    h += esc(cur);
+    h += F("\"><div class=hint>op|route|stop|serviceType|dir|routeId|routeSeq|"
+           "stopSeq|stopTC|stopEN|destTC|destEN &mdash; op 0=KMB 1=Citybus "
+           "2=minibus 3=Long Win. Empty clears the slot.</div></details></div>");
+  }
+  h += F("<div class=hint>Chinese stop names are drawn on the display as images "
+         "baked by this browser, because the device has no Chinese font. If you "
+         "re-flash the firmware the names revert to English &mdash; open this "
+         "page and save again to restore them.</div></fieldset>");
+
   h += FPSTR(PAGE_TAIL);
+  const size_t len = h.length();
   server.send(200, "text/html", h);
+  // Watch these three together: page length rising while getMaxAllocHeap falls
+  // is the signature of the fragmentation this reserve() is guarding against.
+  Serial.printf("webconfig: page %u B, heap %u, largest block %u\n",
+                (unsigned)len, ESP.getFreeHeap(), ESP.getMaxAllocHeap());
 }
 
 // ---------------------------------------------------------------------------
 // Handlers
 // ---------------------------------------------------------------------------
 
-static void handleRoot() { sendPage(); }
+// Set by /label when the browser uploads a freshly baked bitmap for a slot, and
+// cleared whenever the form is served fresh. handleSave uses it to decide
+// whether a changed stop name has left a stale bitmap behind: the browser
+// uploads labels and then submits, so an upload in this page's lifetime means
+// the bitmap matches what is being saved. A slot edited by hand in the manual
+// field has no upload, so its old bitmap is wrong and gets dropped -- and the
+// row falls back to the English name rather than showing the previous stop's.
+static bool labelUploaded[BUS_SLOTS] = { false, false, false };
+
+static void handleRoot() {
+  for (int i = 0; i < BUS_SLOTS; i++) labelUploaded[i] = false;
+  sendPage();
+}
 
 static void handleScan() {
   const int n = WiFi.scanNetworks();
@@ -221,7 +307,34 @@ static void handleSave() {
   else if (lat < -90.0f  || lat > 90.0f) err = F("Latitude must be between -90 and 90.");
   else if (lon < -180.0f || lon > 180.0f)
                                          err = F("Longitude must be between -180 and 180.");
+  // Bus slots. Only shape can be checked here: confirming that a stop id really
+  // exists would mean an internet call inside a request handler, which is
+  // exactly the blocking the appliance rule in docs/decisions.md forbids. The
+  // picker is the real validation -- the /stop/{id} call that fetched the name
+  // IS the proof the id resolves -- and the scene's 檢查車站 state catches the
+  // rest by watching a slot return nothing for six hours.
+  BusStop parsed[BUS_SLOTS];
+  for (int i = 0; i < BUS_SLOTS && err.isEmpty(); i++) {
+    char nm[8];
+    snprintf(nm, sizeof(nm), "bus%d", i);
+    String v = server.arg(nm);
+    v.trim();
+    if (v.isEmpty()) continue;                       // an empty field clears it
+    if (!busStop_unpack(v, parsed[i]))
+      err = String(F("Stop ")) + String(i + 1) + F(" is not a valid entry.");
+  }
+
   if (err.length()) { sendPage(err); return; }
+
+  for (int i = 0; i < BUS_SLOTS; i++) {
+    // The baked bitmap is a picture of exactly these two strings. If either
+    // changed and the browser did not upload a replacement, the old picture is
+    // now a picture of a different stop -- worse than no picture at all.
+    const bool textChanged = (parsed[i].stopTc != g_settings.buses[i].stopTc) ||
+                             (parsed[i].destTc != g_settings.buses[i].destTc);
+    if (textChanged && !labelUploaded[i]) label_clearUser(i);
+    g_settings.buses[i] = parsed[i];
+  }
 
   g_settings.wifiSsid  = ssid;
   if (pass.length()) g_settings.wifiPass = pass;   // blank means "keep current"
@@ -245,6 +358,42 @@ static void handleSave() {
       "clock screen.</p></body></html>"));
 }
 
+static void handleBusJs() {
+  // send_P streams from flash: nothing here is copied into a String.
+  server.sendHeader("Cache-Control", "no-cache");
+  server.send_P(200, "application/javascript", BUS_JS);
+}
+
+// One baked label. Separate from the settings form on purpose: a ~1 KB base64
+// payload per label has no business inside sendPage()'s buffer, and this way a
+// failed bake cannot take the whole save with it.
+static void handleLabel() {
+  const int slot = server.arg("s").toInt();
+  const String which = server.arg("w");
+  const String b64 = server.arg("d");
+
+  if (slot < 0 || slot >= BUS_SLOTS || (which != "s" && which != "d") || b64.isEmpty()) {
+    server.send(400, "text/plain", "bad request");
+    return;
+  }
+
+  // Decoded output is always smaller than its base64, so the input length is a
+  // safe bound for the buffer.
+  size_t cap = (b64.length() * 3) / 4 + 4;
+  uint8_t* buf = (uint8_t*)malloc(cap);
+  if (!buf) { server.send(507, "text/plain", "out of memory"); return; }
+
+  size_t n = 0;
+  const int rc = mbedtls_base64_decode(buf, cap, &n,
+                                       (const unsigned char*)b64.c_str(), b64.length());
+  bool ok = (rc == 0) &&
+            label_saveUser(slot, which == "s" ? UL_STOP : UL_DEST, buf, n);
+  free(buf);
+
+  if (ok) labelUploaded[slot] = true;
+  server.send(ok ? 200 : 400, "text/plain", ok ? "ok" : "rejected");
+}
+
 static void handleNotFound() {
   if (apMode) {
     // Captive-portal bait: Android /generate_204, Apple /hotspot-detect.html and
@@ -261,6 +410,8 @@ static void startServer() {
   server.on("/",      HTTP_GET,  handleRoot);
   server.on("/scan",  HTTP_GET,  handleScan);
   server.on("/save",  HTTP_POST, handleSave);
+  server.on("/bus.js",HTTP_GET,  handleBusJs);
+  server.on("/label", HTTP_POST, handleLabel);
   server.onNotFound(handleNotFound);
   server.begin();
   running = true;

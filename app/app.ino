@@ -27,6 +27,13 @@
 #include "weather.h"
 #include "airquality.h"
 #include "sun_moon.h"
+#include "labels.h"
+#include "bus.h"
+
+// Uncomment to hold a page of every baked Chinese label on the panel at boot.
+// The bus scene's Chinese is 1-bit bitmaps, and whether the threshold kept the
+// interior strokes of a dense glyph is not something a test can assert.
+//#define BUS_LABEL_SELFTEST
 
 // The shared globals declared extern in the headers.
 TFT_eSPI tft = TFT_eSPI();
@@ -149,6 +156,16 @@ void setup() {
 
   settings_begin();
 
+  // Before the setup portal, not after: the portal's /label endpoint writes
+  // here, so a first-time user configuring a bus stop needs the filesystem
+  // already mounted. The first mount on a device that has never had one formats
+  // the partition and takes a couple of seconds, hence the message.
+  bootMessage("Preparing storage...");
+  label_begin();
+#ifdef BUS_LABEL_SELFTEST
+  label_selfTest(8000);
+#endif
+
   // Forced setup is the recovery path for the one case the settings page can't
   // fix itself: the device is configured for a network that no longer exists,
   // so nothing can reach it.
@@ -181,6 +198,7 @@ void setup() {
   sceneManager_begin();
   weather_begin();
   airquality_begin();
+  bus_begin();
   Serial.println("running.  tap = next scene | hold = pin | hold 4 s = recalibrate");
 }
 
@@ -212,6 +230,7 @@ void loop() {
   sceneManager_tick();
   weather_tick();       // fetches when due (first fetch shortly after boot)
   airquality_tick();    // AQI fetch, staggered ~5 s after weather
+  bus_tick();           // at most one bus slot per loop -- see bus.cpp
 
   // Refresh the status strip twice a second (cheap; only changed bits repaint),
   // but five times faster while a finger is down -- that is when the strip is

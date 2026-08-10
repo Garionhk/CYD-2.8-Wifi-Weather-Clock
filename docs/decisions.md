@@ -2,6 +2,152 @@
 
 Running log of choices that change scope or architecture. Newest first.
 
+## 2026-08-10 — Chinese is baked to 1-bit bitmaps, not an embedded font
+
+**Context.** The bus scene shows Hong Kong stop names, destinations and status
+words in Traditional Chinese. TFT_eSPI has no CJK font at all — fonts 2/4/6/8
+are ASCII-only — so this needed a glyph pipeline that did not exist in this
+project.
+
+**What was measured.** A `.vlw` smooth font costs 28 B of metadata plus
+`width × height` bytes per glyph (8-bit alpha). Against a ~4,700-glyph Hong Kong
+common-character set, and 1.83 MB of free flash:
+
+| size | cost | verdict |
+|---|---|---|
+| 12 px | ~819 KB | fits, unreadable across a room |
+| 16 px | ~1.35 MB | fits, marginal |
+| 20 px | ~2.04 MB | **does not fit** |
+
+The readable sizes are exactly the ones that do not fit. Checked also: u8g2's
+CJK fonts are GB2312 — **Simplified only**, so the usual recommendation is
+wrong for Hong Kong.
+
+**Decision.** Do not embed a font. Bake only the characters actually used, as
+1-bpp bitmaps, from two sources:
+
+- **Fixed vocabulary** (`分鐘`, `即將到站`, `無服務`, …) — 18 strings baked at
+  build time by `tools/gen_zh_labels.py` into `app/zh_labels.{h,cpp}`. 2.5 KB.
+  Checked in, with the generator beside them so they stay auditable.
+- **The user's stop names and destinations** — baked by the **browser** at
+  config time and POSTed to `/label`, because the device cannot know them in
+  advance.
+
+At ~400 B per label the size constraint disappears entirely, **at any size**.
+The blob layout is `[w][h][packed rows, MSB first, row-padded]`, chosen because
+that is exactly what `TFT_eSPI::drawBitmap(x,y,bmp,w,h,fg,bg)` already accepts —
+so there is no custom blitter, and the fg/bg form keeps the compare-and-redraw
+partial repaint used everywhere else in this project.
+
+**Storage: LittleFS, not NVS.** `huge_app` leaves an 896 KB filesystem
+partition completely unused; NVS is 20 KB and already holds settings and touch
+calibration. ~1.3 KB per slot is uncomfortable in one and nothing in the other.
+
+**The failure mode this had to survive.** NVS keeps the stop *text* — both
+`name_tc` and `name_en` — while LittleFS keeps only the *bitmap*. Whenever the
+bitmap is absent the scene renders `name_en` in the built-in ASCII font: still
+useful, never blank, and the settings page restores the Chinese with one Save.
+
+Note this is **not**, as originally assumed, because a reflash wipes LittleFS
+and spares NVS. Checked against the actual artifact: `app.ino.merged.bin` is a
+full 4 MB image whose `0xFF` padding covers *both* partitions, so flashing it at
+`0x0` is a factory reset and there is nothing to fall back to — the device comes
+up in the setup portal. `arduino-cli upload` (`tools/flash.sh app`) writes only
+the app segments and preserves both. `flash.md` documents the difference,
+because "update firmware" and "hand this file to someone else" want opposite
+commands.
+
+The fallback still earns its place, for the cases that produce text without a
+bitmap: a stop entered by hand through "Manual entry", a save made while the
+browser had no internet, a bake that failed, or a filesystem erased on its own.
+
+**Consequence.** Live Chinese from the APIs (`rmk_tc`) is not renderable by
+definition. The operators' remark vocabulary is small, so known remarks map onto
+the baked set from their **English** field and anything unrecognised falls back
+to `rmk_en` in Font 2 — which is also why the JSON filters deliberately drop
+`dest_tc`/`rmk_tc` rather than carrying UTF-8 the device cannot draw.
+
+## 2026-08-10 — Only KMB serves plain HTTP; the other two cost a TLS handshake
+
+**Context.** An earlier claim that "KMB serves plain HTTP, so no TLS anywhere"
+was half right, and the wrong half drove the whole fetch design. Probed live:
+
+```
+http://data.etabus.gov.hk/v1/transport/kmb/eta/...   200, ~270 ms   <- works
+http://rt.data.gov.hk/v2/transport/citybus/eta/...   301 -> https
+http://data.etagmb.gov.hk/eta/route-stop/...         301 -> https
+```
+
+Host *roots* redirect on all three; only KMB's **API path** serves plain HTTP.
+So two of three operators cost a ~1.2–2.5 s handshake, inside `loop()`.
+
+**Decision.** Pay the handshake and give the heap straight back, rather than
+holding connections open. Four mitigations, in descending order of value:
+
+1. `if (touch_isDown()) return;` at the top of `bus_tick()`. One line, and the
+   most valuable of the four — a 2 s stall under a finger eats the tap outright.
+2. One slot per tick, never a burst.
+3. Idle cadence 300 s per slot at 100 s offsets → one fetch per ~100 s, ~2%
+   duty. Active (scene showing, or left within 30 s) 30 s at 10 s offsets.
+4. `setReuse(false)`, so no mbedTLS context outlives a fetch.
+
+**What changed from the plan.** It called for `WiFiClientSecure::setSession()`
+to skip the handshake. **That API does not exist in the ESP32 Arduino core** —
+it is an ESP8266/BearSSL feature — so session resumption is not available at
+all. The alternative, `setReuse(true)`, holds ~35 KB of live TLS context per
+host; two of those against a ~108 KB largest contiguous block is precisely what
+makes `clockEnter`'s 10 KB sprite allocation start failing after hours of
+uptime. The plan's own stated fallback — lengthen the idle interval — is what
+this ships with. Every fetch logs elapsed millis, free heap and
+`getMaxAllocHeap` so this stays a measured decision rather than an assumed one.
+
+**Why staleness is cheap here.** ETAs are stored as **absolute epoch seconds**
+and the countdown is recomputed every second from `time(nullptr)`. A 300 s-old
+fetch still shows the right number; idle staleness costs only a newly-appeared
+bus. Unplugging the router mid-scene leaves the display counting down correctly,
+with only the header's age changing colour.
+
+## 2026-08-10 — Route and stop discovery happens in the browser, not on the device
+
+**Context.** Turning "68X" into something the device can poll means resolving a
+route to a variant to a stop id, against three different APIs with three
+different models — and KMB has no "list variants" endpoint at all
+(`/route/68X` → 422), so the eight `{outbound,inbound} × service_type 1..4`
+combinations have to be probed and filtered.
+
+**Decision.** All of it runs in `/bus.js` in the browser. Only resolved ids ever
+reach the ESP32; `settings.h` stores the result and nothing else.
+
+**Why, beyond "the ESP32 is small".** The operators regenerate route variant
+numbering nightly at 05:00. A device that matched routes to stops itself would
+need that matching logic maintained on the wall, and its failure mode — a slot
+that worked yesterday and now returns empty forever — is indistinguishable from
+"no bus is coming". Keeping the matching in the browser means a re-pick is the
+repair, and the device never has to be clever. **Do not add self-healing route
+matching to the firmware**; that is the thing this decision moved out.
+
+Three consequences worth stating:
+
+- **Validation is structural, not semantic.** An invalid stop id returns HTTP
+  200 with `"data":[]`, identical to "no bus is coming", so `handleSave` can
+  only check shape. The picker is the real validation — the `/stop/{id}` call
+  that fetched the name *is* the proof the id resolves. Semantic validation
+  would mean an internet call inside a request handler, which the appliance rule
+  below forbids. Over time the scene discriminates instead: a slot returning
+  nothing for **six consecutive hours** shows `檢查車站`.
+- **The page must work with the picker dead.** AP mode has no internet by
+  construction, so the fieldset is a plain text input holding a packed string
+  with the picker layered on top — not the reverse. Saving with the picker dead
+  preserves every configured stop, and "Manual entry" is a permanent escape
+  hatch rather than a debug affordance.
+- **Canvas rasterisation is not deterministic across browsers.** Different
+  devices have different Hong Kong fonts and hinting, so the same name baked on
+  a phone and a desktop will not be pixel-identical. Harmless — but it is why
+  the page previews the **packed 1-bit result** rather than the antialiased
+  canvas, and why the label text is editable: the operators' names are written
+  for a route database, not a wall, and `洪水橋(洪福邨)總站 (YL900)` shrinks to
+  ~12 px to fit a 232 px row, which defeats the point of a two-row layout.
+
 ## 2026-08-06 — All user settings move to NVS and a web UI; config.h is deleted
 
 **Context.** WiFi credentials, latitude/longitude, timezone and units were

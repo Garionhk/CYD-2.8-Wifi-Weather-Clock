@@ -21,6 +21,15 @@ struct Scene {
   void (*onEnter)();   // full redraw of the content area
   void (*onTick)();    // partial redraw only (may be null)
   void (*onExit)();    // cleanup, e.g. free sprites (may be null)
+  // How long a tap ONTO this scene suspends auto-rotation. 0 means "use
+  // SCENE_FREEZE_MS", which is what every scene wanted until the bus scene --
+  // where you tap to watch a countdown, not to read a number, so 45 s is not
+  // long enough to be worth the tap.
+  //
+  // Deliberately the LAST member: C++11 aggregate initialisation
+  // value-initialises omitted trailing members, so every existing row in the
+  // scene table compiles unchanged and means exactly what it did before.
+  uint32_t    freezeMs;
 };
 
 void sceneManager_begin();   // enter the first scene

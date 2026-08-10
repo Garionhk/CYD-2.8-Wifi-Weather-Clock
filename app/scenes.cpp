@@ -5,6 +5,9 @@
 #include "units.h"
 #include "sun_moon.h"
 #include "webconfig.h"
+#include "settings.h"
+#include "labels.h"
+#include "bus.h"
 #include <WiFi.h>
 #include <time.h>
 #include <math.h>
@@ -562,13 +565,444 @@ static void sunMoonTick() {
 }
 
 // ===========================================================================
+// Scene 5 -- 下一班車 / Next Bus
+// ===========================================================================
+// The other four scenes answer "what is it like outside". This one answers
+// "should I leave now", which is why it earns a 60 s hold rather than the usual
+// 45: you tap to it to WATCH a countdown, not to read a number once.
+//
+// Two structural things are worth knowing before reading the drawing code:
+//
+//   * All Chinese is 1-bit bitmaps (labels.h). The fixed vocabulary is baked at
+//     build time; stop names and destinations are baked by the browser. When a
+//     user bitmap is missing -- which is the state after every reflash, because
+//     that wipes LittleFS but not NVS -- the row falls back to the English name
+//     in the built-in font. Never blank.
+//
+//   * Minutes are derived from ABSOLUTE epoch ETAs on every tick, never stored
+//     as a countdown. So a five-minute-old fetch still shows the right number,
+//     and pulling the network out mid-scene leaves the display counting down
+//     correctly with only the header's age going red.
+
+// Sentinels returned by busMinutes() in place of a real minute count. All
+// negative, so the ">= 2 minutes" test in the drawing code stays a plain
+// comparison rather than a special case.
+static const int BM_LOADING = -1;   // no fetch has landed yet
+static const int BM_NONE    = -2;   // fetched fine, nothing is coming
+static const int BM_CHECK   = -3;   // nothing coming for six hours -- suspect
+static const int BM_NOCLOCK = -4;   // NTP never synced; no countdown is possible
+
+// How long a run of empty-but-successful fetches has to last before the scene
+// stops saying "no service" and starts suggesting the stop id itself is wrong.
+// Six hours is chosen to be longer than any real service gap -- even an
+// overnight-only route reappears inside it -- so this cannot fire on a quiet
+// afternoon. See BusEta::emptySince.
+static const uint32_t BUS_CHECK_AFTER_S = 6 * 3600;
+
+// Age bands for the header. Deliberately NOT the status strip's 30 min / 2 h --
+// those are right for weather, which changes hourly, and far too loose here.
+// The idle cadence is 300 s per slot, so anything inside 600 s means the feed
+// is keeping up and nothing is wrong.
+static const uint32_t BUS_AGE_WARN_S = 600;
+static const uint32_t BUS_AGE_OLD_S  = 1800;
+
+static const uint32_t BUS_PAGE_MS = 8000;
+
+static int      busSlots[BUS_SLOTS];        // configured slot indices, compacted
+static int      busCount   = 0;
+static int      busPage    = 0, busPages = 1;
+static uint32_t busPageAt  = 0;
+static int      busRowSlot[2]  = { -1, -1 };  // slot shown in each row, -1 blank
+static int      busShownMin[2] = { -99, -99 };
+static uint32_t busShownAt[2]  = { 0, 0 };
+static uint32_t busShownSec    = 0;
+static int      busShownAge    = -999;
+static bool     busShownAgeMin = false;       // header unit is 分前, not 秒前
+
+static uint16_t opColour(BusOperator op) {
+  switch (op) {
+    case OP_CTB: return COL_OP_CTB;
+    case OP_GMB: return COL_OP_GMB;
+    case OP_LWB: return COL_OP_LWB;
+    default:     return COL_OP_KMB;
+  }
+}
+
+// Yellow and gold need black on them; red and green need white. Getting this
+// backwards makes the route number unreadable at exactly the distance the
+// scene is designed for.
+static uint16_t opTextColour(BusOperator op) {
+  return (op == OP_CTB || op == OP_LWB) ? COL_BG : COL_TEXT;
+}
+
+// Minutes until the next bus at `slot`, floored, or one of the BM_ sentinels.
+// Flooring rather than rounding is deliberate: understating is the safe
+// direction for something you are about to run for.
+static int busMinutes(int slot, bool& sched, uint8_t& rmk, const char*& rmkEn) {
+  sched = false; rmk = 0xFF; rmkEn = "";
+  const BusEta& e = g_data.bus[slot];
+  const time_t now = time(nullptr);
+
+  // Before NTP lands, time(nullptr) is somewhere in 1970 and every ETA looks
+  // 56 years away. Saying so is far better than rendering that.
+  if (now < 1700000000L) return BM_NOCLOCK;
+  if (!e.valid)          return BM_LOADING;
+
+  // The second ETA is what makes a departure roll over instantly instead of
+  // leaving the row blank until the next fetch, which on the idle cadence
+  // could be five minutes.
+  for (int i = 0; i < 2; i++) {
+    if (e.eta[i] > now) {
+      sched = e.scheduled[i];
+      rmk   = e.remark[i];
+      rmkEn = e.remarkEn[i];
+      return (int)((e.eta[i] - now) / 60);
+    }
+  }
+  if (e.emptySince && (uint32_t)now - e.emptySince >= BUS_CHECK_AFTER_S) return BM_CHECK;
+  return BM_NONE;
+}
+
+// Badge position along the rail. sqrt keeps the resolution where it matters:
+// the difference between 2 and 4 minutes is worth seeing, between 24 and 26 it
+// is not. Returns the badge's LEFT edge.
+static int busBadgeX(int mins) {
+  const int xStop = BUS_TRACK_X0 + 4;
+  const int xFar  = BUS_TRACK_X1 - BUS_BADGE_W;
+  if (mins < 0) return xFar;
+  const int m = (mins > BUS_TRACK_MAX_MIN) ? BUS_TRACK_MAX_MIN : mins;
+  const float f = sqrtf((float)m / (float)BUS_TRACK_MAX_MIN);
+  return xStop + (int)(f * (xFar - xStop));
+}
+
+// Rail, stop marker and badge. Repaints the whole strip rather than erasing the
+// badge's old position: a fillRect is one windowed blast over SPI and tracking
+// the previous x would be state to get wrong for no measurable gain.
+static void drawBusTrack(int row, int slot, int mins) {
+  const int y0 = BUS_ROW_Y[row];
+  const int cy = y0 + BUS_TRACK_DY;
+  tft.fillRect(BUS_TRACK_X0 - 2, cy - BUS_BADGE_H / 2 - 1,
+               BUS_TRACK_X1 - BUS_TRACK_X0 + 6, BUS_BADGE_H + 2, COL_BG);
+
+  // Nothing is coming: the rail would be a track with no vehicle on it, which
+  // reads as "loading" rather than "none". Leave it empty.
+  if (mins < 0 && mins != BM_LOADING) return;
+
+  tft.drawFastHLine(BUS_TRACK_X0, cy,     BUS_TRACK_X1 - BUS_TRACK_X0, COL_DIM);
+  tft.drawFastHLine(BUS_TRACK_X0, cy + 1, BUS_TRACK_X1 - BUS_TRACK_X0, COL_DIM);
+  tft.fillRect(BUS_TRACK_X0 - 1, cy - 7, 3, 16, COL_TEXT);   // the stop itself
+
+  if (mins == BM_LOADING) return;
+
+  const BusStop& b = g_settings.buses[slot];
+  bool sched = false; uint8_t rmk; const char* rmkEn;
+  busMinutes(slot, sched, rmk, rmkEn);
+
+  const int x = busBadgeX(mins);
+  const int by = cy - BUS_BADGE_H / 2;
+  const bool far = (mins > BUS_TRACK_MAX_MIN);
+  const uint16_t col = far ? COL_DIM : opColour(b.op);
+
+  if (sched) {
+    // Hollow means the time came from a timetable, not a live prediction. This
+    // keeps the colour channel free for operator identity, which is what the
+    // colour is FOR -- encoding confidence in it too would cost recognition.
+    tft.fillRoundRect(x, by, BUS_BADGE_W, BUS_BADGE_H, 6, COL_BG);
+    tft.drawRoundRect(x, by, BUS_BADGE_W, BUS_BADGE_H, 6, col);
+    tft.drawRoundRect(x + 1, by + 1, BUS_BADGE_W - 2, BUS_BADGE_H - 2, 5, col);
+    tft.setTextColor(col, COL_BG);
+  } else {
+    tft.fillRoundRect(x, by, BUS_BADGE_W, BUS_BADGE_H, 6, col);
+    tft.setTextColor(far ? COL_BG : opTextColour(b.op), col);
+  }
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextFont(4);
+  tft.drawString(b.route, x + BUS_BADGE_W / 2, by + BUS_BADGE_H / 2);
+}
+
+// The right-hand column: the number and 分鐘, or a baked state label instead.
+// Font 6 is digits-only, which is precisely why the special states are bitmaps
+// rather than strings -- there is no font on this device that could set them.
+static void drawBusMinutes(int row, int slot, int mins) {
+  const int y0 = BUS_ROW_Y[row];
+  tft.fillRect(BUS_NUM_L, y0 + 2, BUS_NUM_R - BUS_NUM_L + 2, BUS_ROW_H - 6, COL_BG);
+
+  // Vertically centred on the row for the states, which have no second line.
+  const int myCy = y0 + BUS_TRACK_DY;
+
+  switch (mins) {
+    case BM_NOCLOCK: label_draw(ZH_NO_CLOCK,   BUS_NUM_R, myCy, LBL_RIGHT, COL_DIM,          COL_BG); return;
+    case BM_NONE:    label_draw(ZH_NO_SERVICE, BUS_NUM_R, myCy, LBL_RIGHT, COL_DIM,          COL_BG); return;
+    case BM_CHECK:   label_draw(ZH_CHECK_STOP, BUS_NUM_R, myCy, LBL_RIGHT, COL_FRESH_OLD,    COL_BG); return;
+    case BM_LOADING:
+      tft.setTextColor(COL_DIM, COL_BG);
+      tft.setTextDatum(MR_DATUM);
+      tft.setTextFont(6);
+      tft.drawString("--", BUS_NUM_R, y0 + BUS_MIN_DY);
+      return;
+    default: break;
+  }
+
+  if (mins <= 1) {
+    label_draw(ZH_ARRIVING, BUS_NUM_R, myCy, LBL_RIGHT, COL_ACCENT, COL_BG);
+    return;
+  }
+
+  const uint16_t c = (mins <= 3) ? COL_FRESH_WARN : COL_TEXT;
+  tft.setTextColor(c, COL_BG);
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextFont(6);
+  tft.drawString(String(mins), BUS_NUM_R, y0 + BUS_MIN_DY);
+  label_draw(ZH_FEN_ZHONG, BUS_NUM_R, y0 + BUS_UNIT_DY, LBL_RIGHT, COL_DIM, COL_BG);
+}
+
+// Remark, right-aligned against the far end of the track. Known remarks get
+// their baked Chinese; anything the operators invent later still shows, in
+// English, rather than vanishing.
+//
+// Redrawn on every minute change, not just on a full row repaint. It belongs to
+// the ETA being displayed, and when the first bus departs the row rolls over to
+// the second -- whose remark may say something completely different. Leaving it
+// with the static half would have shown the previous bus's remark against the
+// next bus's time.
+static void drawBusRemark(int row, int slot) {
+  const int y0 = BUS_ROW_Y[row];
+  bool sched; uint8_t rmk; const char* rmkEn;
+  busMinutes(slot, sched, rmk, rmkEn);
+
+  // Line 3 is 206 px shared between 往, the destination and this. It only
+  // balances because the two commonest remarks -- 原定班次 and 未開出, both
+  // meaning "timetable, not a live prediction" -- are already said by the
+  // hollow badge, so printing them here as well would spend the scarcest space
+  // on the row saying the same thing twice. What is left is rare and genuinely
+  // new: 尾班車, 已開出, and whatever the operators invent next.
+  const int x0 = BUS_TRACK_X1 - 59;
+  tft.fillRect(x0, y0 + BUS_DEST_DY - 10, BUS_TRACK_X1 - x0 + 1, 21, COL_BG);
+  if (sched) return;
+
+  if (rmk != 0xFF) {
+    label_draw((ZhLabel)rmk, BUS_TRACK_X1, y0 + BUS_DEST_DY, LBL_RIGHT, COL_DIM, COL_BG);
+  } else if (rmkEn && *rmkEn) {
+    tft.setTextColor(COL_DIM, COL_BG);
+    tft.setTextDatum(MR_DATUM);
+    tft.setTextFont(2);
+    tft.drawString(rmkEn, BUS_TRACK_X1, y0 + BUS_DEST_DY);
+  }
+}
+
+// Everything in a row that does not change once a minute.
+static void drawBusRowStatic(int row, int slot) {
+  const int y0 = BUS_ROW_Y[row];
+  tft.fillRect(0, y0, BUS_NUM_L - 2, BUS_ROW_H, COL_BG);
+  if (slot < 0) { tft.fillRect(BUS_NUM_L - 2, y0, SCREEN_W - BUS_NUM_L + 2, BUS_ROW_H, COL_BG); return; }
+
+  const BusStop& b = g_settings.buses[slot];
+
+  // Stop name. The English fallback is not a degraded mode to be embarrassed
+  // about -- it is the whole reason a reflash does not look like data loss.
+  if (!label_drawUser(slot, UL_STOP, BUS_TRACK_X0, y0 + BUS_NAME_DY,
+                      LBL_LEFT, COL_TEXT, COL_BG)) {
+    tft.setTextColor(COL_TEXT, COL_BG);
+    tft.setTextDatum(ML_DATUM);
+    tft.setTextFont(4);
+    tft.drawString(b.stopEn.length() ? b.stopEn : b.stopId, BUS_TRACK_X0, y0 + BUS_NAME_DY);
+  }
+
+  // Destination, prefixed 往 ("to").
+  int x = BUS_TRACK_X0;
+  if (b.destTc.length() || b.destEn.length()) {
+    label_draw(ZH_TO, x, y0 + BUS_DEST_DY, LBL_LEFT, COL_DIM, COL_BG);
+    x += label_width(ZH_TO) + 5;
+    if (!label_drawUser(slot, UL_DEST, x, y0 + BUS_DEST_DY, LBL_LEFT, COL_DATE, COL_BG)) {
+      tft.setTextColor(COL_DATE, COL_BG);
+      tft.setTextDatum(ML_DATUM);
+      tft.setTextFont(2);
+      tft.drawString(b.destEn, x, y0 + BUS_DEST_DY);
+    }
+  }
+
+  drawBusRemark(row, slot);
+}
+
+// Header: page dots on the left, "更新 47秒前" on the right.
+// Fixed cells, so the once-a-second number repaint cannot shuffle the labels
+// beside it -- the only thing that moves is the digits.
+static const int BUS_AGE_UNIT_R = BUS_NUM_R;
+static const int BUS_AGE_NUM_R  = BUS_NUM_R - 34;
+static const int BUS_AGE_NUM_L  = BUS_AGE_NUM_R - 30;
+
+static void drawBusAge(bool force) {
+  // Oldest of the rows on screen: the honest answer to "how stale is what I am
+  // looking at" is the worst of it, not the best.
+  int32_t age = -1;
+  for (int r = 0; r < 2; r++) {
+    if (busRowSlot[r] < 0) continue;
+    const int32_t a = bus_ageSeconds(busRowSlot[r]);
+    if (a < 0) continue;
+    if (a > age) age = a;
+  }
+
+  if (age < 0) {
+    if (force) tft.fillRect(BUS_AGE_NUM_L - 42, 0, SCREEN_W - BUS_AGE_NUM_L + 42, 18, COL_BG);
+    busShownAge = -999;
+    return;
+  }
+
+  const bool useMin = (age >= 60);
+  const int  val    = useMin ? (int)(age / 60) : (int)age;
+  if (!force && val == busShownAge && useMin == busShownAgeMin) return;
+
+  if (force || useMin != busShownAgeMin) {
+    tft.fillRect(BUS_AGE_NUM_L - 42, 0, SCREEN_W - BUS_AGE_NUM_L + 42, 18, COL_BG);
+    label_draw(ZH_UPDATED, BUS_AGE_NUM_L - 5, BUS_HDR_Y, LBL_RIGHT, COL_DIM, COL_BG);
+    label_draw(useMin ? ZH_MIN_AGO : ZH_SEC_AGO, BUS_AGE_UNIT_R, BUS_HDR_Y,
+               LBL_RIGHT, COL_DIM, COL_BG);
+  }
+  busShownAgeMin = useMin;
+  busShownAge    = val;
+
+  const uint16_t c = ((uint32_t)age >= BUS_AGE_OLD_S)  ? COL_FRESH_OLD
+                   : ((uint32_t)age >= BUS_AGE_WARN_S) ? COL_FRESH_WARN
+                                                       : COL_DIM;
+  tft.fillRect(BUS_AGE_NUM_L, 1, BUS_AGE_NUM_R - BUS_AGE_NUM_L + 1, 16, COL_BG);
+  tft.setTextColor(c, COL_BG);
+  tft.setTextDatum(MR_DATUM);
+  tft.setTextFont(2);
+  tft.drawString(String(val), BUS_AGE_NUM_R, BUS_HDR_Y);
+}
+
+static void drawBusDots() {
+  if (busPages <= 1) return;
+  for (int i = 0; i < busPages; i++) {
+    const int cx = 10 + i * 13;
+    if (i == busPage) tft.fillCircle(cx, BUS_HDR_Y, 4, COL_ACCENT);
+    else { tft.fillCircle(cx, BUS_HDR_Y, 4, COL_BG); tft.drawCircle(cx, BUS_HDR_Y, 4, COL_DIM); }
+  }
+}
+
+// Paint the current page from scratch.
+static void drawBusPage() {
+  for (int r = 0; r < 2; r++) {
+    const int n = busPage * 2 + r;
+    busRowSlot[r] = (n < busCount) ? busSlots[n] : -1;
+  }
+  tft.fillRect(0, 0, SCREEN_W, CONTENT_H, COL_BG);
+  drawBusDots();
+  for (int r = 0; r < 2; r++) {
+    const int slot = busRowSlot[r];
+    drawBusRowStatic(r, slot);
+    if (slot < 0) { busShownMin[r] = -99; busShownAt[r] = 0; continue; }
+    bool sched; uint8_t rmk; const char* rmkEn;
+    const int m = busMinutes(slot, sched, rmk, rmkEn);
+    drawBusTrack(r, slot, m);
+    drawBusMinutes(r, slot, m);
+    busShownMin[r] = m;
+    busShownAt[r]  = g_data.bus[slot].updatedAt;
+  }
+  drawBusAge(true);
+  // Deliberately does NOT touch busPageAt. This repaints whatever page is
+  // current, and it is called whenever a fetch lands -- on the active cadence
+  // that is every ten seconds, which would have kept resetting the eight-second
+  // page timer and left a three-stop configuration stuck on page one.
+}
+
+// Nothing configured. Never blank, and it says how to fix itself -- the same
+// reasoning as the clock's settings-address footer.
+static void drawBusUnconfigured() {
+  tft.fillRect(0, 0, SCREEN_W, CONTENT_H, COL_BG);
+  label_draw(ZH_NEXT_BUS, SCREEN_W / 2, 46, LBL_CENTRE, COL_ACCENT, COL_BG);
+  label_draw(ZH_NOT_SET,  SCREEN_W / 2, 92, LBL_CENTRE, COL_TEXT,   COL_BG);
+  char net[48];
+  netFooter(net, sizeof(net));
+  tft.setTextColor(COL_DIM, COL_BG);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextFont(2);
+  tft.drawString("Add bus stops on the settings page", SCREEN_W / 2, 138);
+  tft.drawString(net, SCREEN_W / 2, 162);
+}
+
+static void busEnter() {
+  busCount = 0;
+  for (int i = 0; i < BUS_SLOTS; i++)
+    if (g_settings.buses[i].valid()) busSlots[busCount++] = i;
+
+  busPages = (busCount + 1) / 2;
+  if (busPages < 1) busPages = 1;
+  if (busPage >= busPages) busPage = 0;
+
+  busShownSec    = 0;
+  busShownAge    = -999;
+  busShownAgeMin = false;
+
+  // Pulls every slot's next fetch forward, but never sooner than 500 ms out --
+  // so this function never blocks on a TLS handshake and the scene paints on
+  // the very next frame.
+  bus_markActive();
+  bus_requestRefresh();
+
+  if (busCount == 0) { busRowSlot[0] = busRowSlot[1] = -1; drawBusUnconfigured(); return; }
+  busPageAt = millis();
+  drawBusPage();
+}
+
+// Throttled on epoch SECONDS, not minutes -- sunMoonTick's per-minute pattern
+// is the right shape but the wrong period for a countdown. 199 of every 200
+// iterations return on the first comparison.
+//
+// time(nullptr) rather than getLocalTime(): the latter carries a 10 ms timeout
+// and builds a broken-down local time this scene never looks at.
+static void busTick() {
+  bus_markActive();                    // keeps the fast fetch cadence alive
+  if (busCount == 0) return;
+
+  // A fetch landing is worth a full repaint: the destination, the remark and
+  // the badge's live/scheduled state can all have changed, not just the number.
+  for (int r = 0; r < 2; r++) {
+    const int slot = busRowSlot[r];
+    if (slot >= 0 && g_data.bus[slot].updatedAt != busShownAt[r]) { drawBusPage(); return; }
+  }
+
+  if (busPages > 1 && millis() - busPageAt >= BUS_PAGE_MS) {
+    busPage = (busPage + 1) % busPages;
+    busPageAt = millis();
+    drawBusPage();
+    return;
+  }
+
+  const uint32_t now = (uint32_t)time(nullptr);
+  if (now == busShownSec) return;
+  busShownSec = now;
+
+  drawBusAge(false);
+
+  // The badge and the number repaint only when the integer minute changes --
+  // once a minute per row, not once a second. So the badge slides in
+  // one-minute steps, which is honest about the data's precision and avoids
+  // redrawing the whole track at 1 Hz for a movement nobody could see.
+  for (int r = 0; r < 2; r++) {
+    const int slot = busRowSlot[r];
+    if (slot < 0) continue;
+    bool sched; uint8_t rmk; const char* rmkEn;
+    const int m = busMinutes(slot, sched, rmk, rmkEn);
+    if (m == busShownMin[r]) continue;
+    busShownMin[r] = m;
+    drawBusTrack(r, slot, m);
+    drawBusMinutes(r, slot, m);
+    drawBusRemark(r, slot);
+  }
+}
+
+// ===========================================================================
 // Scene table + manager
 // ===========================================================================
+// Bus goes LAST, after Air Quality. Inserting it earlier would rewrite the
+// tap-count muscle memory of three scenes that have not changed in months.
 static Scene scenes[] = {
   { "Clock",       35000, clockEnter,   clockTick, clockExit },
   { "Weather",     12000, weatherEnter, weatherTick, nullptr },
   { "Sun & Moon",  12000, sunMoonEnter, sunMoonTick, nullptr },
   { "Air Quality", 12000, airQualEnter, airQualTick, nullptr },
+  { "Next Bus",    12000, busEnter,     busTick,    nullptr, 60000 },
 };
 static const int SCENE_COUNT = sizeof(scenes) / sizeof(scenes[0]);
 
@@ -596,15 +1030,23 @@ void sceneManager_begin() {
 
 void sceneManager_handleTouch(TouchEvent ev) {
   switch (ev) {
-    case TOUCH_TAP:
+    case TOUCH_TAP: {
       // Advance immediately, then hold still for a while. Without the freeze a
       // tap made two seconds before a dwell expires would show the next scene
       // for two seconds and then move on again, which reads as a glitch.
-      freezeUntil = millis() + SCENE_FREEZE_MS;
-      goToScene((curIdx + 1) % SCENE_COUNT);
+      //
+      // The DESTINATION's freeze, not the current scene's -- which is why `next`
+      // is computed first. This used to set freezeUntil before goToScene, which
+      // was only ever safe because the value was one global constant.
+      const int next = (curIdx + 1) % SCENE_COUNT;
+      const uint32_t freeze = scenes[next].freezeMs ? scenes[next].freezeMs
+                                                    : SCENE_FREEZE_MS;
+      freezeUntil = millis() + freeze;
+      goToScene(next);
       Serial.printf("scene: tap -> %s (rotation frozen %lus)\n",
-                    scenes[curIdx].name, SCENE_FREEZE_MS / 1000);
+                    scenes[curIdx].name, freeze / 1000);
       break;
+    }
 
     case TOUCH_LONG_PRESS:
       pinned = !pinned;

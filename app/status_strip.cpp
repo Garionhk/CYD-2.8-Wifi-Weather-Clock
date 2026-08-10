@@ -24,6 +24,12 @@ static const int FRESH_X   = 152;
 static const int PIN_X     = 188;         // pin glyph centre
 static const int FREEZE_X  = 216;         // pause glyph left edge
 static const int DOTS_R    = 300;         // right-most scene dot centre
+// Dot pitch. Was 16, which fitted four; the fifth scene's leftmost dot would
+// have had its left edge at x=232 against the freeze glyph ending at x=228 --
+// 4 px of clearance, and a sixth would have overlapped outright. At 13 the five
+// dots span 248..300 with 16 px clear, and since they are only r=4 the 5 px gap
+// between them looks no different from before.
+static const int DOTS_PITCH = 13;
 
 static int wifiLevel() {
   if (WiFi.status() != WL_CONNECTED) return 0;
@@ -101,7 +107,7 @@ static void drawFreeze(bool on) {
 static void drawSceneDots(int idx) {
   int count = sceneManager_count();
   for (int i = 0; i < count; i++) {
-    int cx = DOTS_R - (count - 1 - i) * 16;
+    int cx = DOTS_R - (count - 1 - i) * DOTS_PITCH;
     if (i == idx) tft.fillCircle(cx, STATUS_CY, 4, COL_ACCENT);
     else {
       tft.fillCircle(cx, STATUS_CY, 4, COL_STRIP_BG);  // clear old fill
