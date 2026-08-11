@@ -479,16 +479,31 @@ static void drawMoon(int cx, int cy, int R, float phase) {
   tft.drawCircle(cx, cy, R, COL_DIM);
 }
 
-static const int SM_GX = 170, SM_GY = 140;   // golden-hour value position
+// Golden hour, centred in the empty lower-right quadrant.
+//
+// It used to sit left-aligned at x=170, y=140, immediately right of the moon's
+// phase name -- and they actually collided: "Waning Crescent" is 101 px in
+// Font 2 from x=72, so it ran to x=173 across rows that the golden-hour value
+// also occupied. Even the short phase names left them flush.
+//
+// Below the UV row (which ends at y=107) the whole right side was empty, so
+// that is where this goes: centred on x=243 between the column edge and the
+// screen, and vertically centred in y=107..196. The value gets Font 4 rather
+// than Font 2 because there is now room for it, and "how long until the light
+// is good" is the number you actually came to read -- 124 px at its longest
+// ("in 23h 59m"), which fits the 150 px column with margin either side.
+static const int SM_GX  = 243;   // centre line of the golden-hour block
+static const int SM_GLY = 138;   // "Golden hour" label
+static const int SM_GY  = 166;   // the value
 static int smShownMin = -1;
 
 static void drawGolden() {
   char g[24];
   goldenHourStatus(g, sizeof(g));
-  tft.fillRect(SM_GX, SM_GY - 10, 150, 20, COL_BG);
+  tft.fillRect(SM_GX - 75, SM_GY - 15, 152, 30, COL_BG);
   tft.setTextColor(C_SUN, COL_BG);
-  tft.setTextDatum(ML_DATUM);
-  tft.setTextFont(2);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextFont(4);
   tft.drawString(g, SM_GX, SM_GY);
 }
 
@@ -547,11 +562,11 @@ static void sunMoonEnter() {
     tft.drawString("--", rx + 62, 94);
   }
 
-  // Golden-hour label + value
+  // Golden-hour label + value, centred beneath the rise/set/UV column.
   tft.setTextColor(COL_DATE, COL_BG);
-  tft.setTextDatum(ML_DATUM);
+  tft.setTextDatum(MC_DATUM);
   tft.setTextFont(2);
-  tft.drawString("Golden hour", rx, 122);
+  tft.drawString("Golden hour", SM_GX, SM_GLY);
   struct tm t; getLocalTime(&t, 10); smShownMin = t.tm_min;
   drawGolden();
 }

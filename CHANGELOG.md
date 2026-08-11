@@ -57,6 +57,12 @@
   flashing it at `0x0` is a factory reset — settings, touch calibration and all.
   `./tools/flash.sh app` uploads only the application and preserves them. The
   two are now documented as the different operations they are.
+- **Golden hour collided with the moon phase name on the Sun & Moon screen.**
+  It sat left-aligned at x=170 while "Waning Crescent" runs to x=173 in Font 2,
+  across rows the golden-hour value also occupied — so the longest phase names
+  overlapped it outright and the rest sat flush against it. The whole lower-right
+  quadrant was empty, so the pair now centres there instead, and the value moves
+  up to Font 4 since there is room for it.
 - Scene-position dots in the status strip were pitched 16 px apart, which left
   the fifth dot 4 px from the pause glyph and would have overlapped at six. Now
   13 px, with 16 px of clearance.
