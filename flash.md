@@ -28,9 +28,13 @@ arduino-cli lib install TFT_eSPI XPT2046_Touchscreen ArduinoJson
 `WiFi`, `WebServer`, `DNSServer`, `WiFiClientSecure`, `HTTPClient`,
 `Preferences` and `time.h` all ship with the core.
 
-> **ArduinoJson 7 is fine.** The fetch code uses `DynamicJsonDocument`, which is
-> v6 syntax; v7 still accepts it as a deprecated alias, so it compiles (with
-> warnings under `--warnings all`) and runs correctly. No version pin needed.
+> **ArduinoJson 6 and 7 both work.** `weather.cpp` and `airquality.cpp` use v6's
+> `DynamicJsonDocument`, which v7 accepts as a deprecated alias — it compiles
+> (with warnings under `--warnings all`) and runs correctly. `bus.cpp` uses v7's
+> `JsonDocument`. No version pin needed either way.
+
+`LittleFS` and `mbedtls` also ship with the core; the bus scene uses the first to
+store baked Chinese stop names and the second to decode them on upload.
 
 ### Install the display config — the step that catches everyone
 
@@ -69,7 +73,7 @@ app/build/esp32.esp32.esp32/
 | File | Size | Purpose |
 | --- | --- | --- |
 | **`app.ino.merged.bin`** | **4 MB** | **all of the below, pre-combined — this is the one you publish** |
-| `app.ino.bin` | 1.2 MB | the application alone |
+| `app.ino.bin` | 1.3 MB | the application alone |
 | `app.ino.bootloader.bin` | 24 KB | second-stage bootloader |
 | `app.ino.partitions.bin` | 3 KB | partition table |
 | `boot_app0.bin` | 8 KB | OTA selector |
@@ -86,7 +90,7 @@ Rename it to something meaningful before uploading, e.g.:
 cp app/build/esp32.esp32.esp32/app.ino.merged.bin cyd-clock-weather-v2.1.0-4mb.bin
 ```
 
-The application is about 38% of the 3 MB app partition, so there is plenty of
+The application is about 41% of the 3 MB app partition, so there is plenty of
 headroom.
 
 `--export-binaries` is what writes these into the sketch folder; without it
@@ -144,7 +148,8 @@ already defaults to the right FQBN.
 The default partition scheme reserves a second application slot for OTA updates.
 This firmware has no OTA, so that slot is dead weight — and without the switch
 the build sits at **93%** of the default 1.31 MB app area, which leaves no room
-to grow. `huge_app` gives 3 MB and drops the same image to 38%.
+to grow. `huge_app` gives 3 MB and drops the same image to 41%, and carries an
+896 KB filesystem partition that the bus scene's baked Chinese names live in.
 
 The scheme is baked into the partition table, which the merged image carries, so
 it travels with the firmware automatically — nobody flashing it has to know or

@@ -1014,7 +1014,7 @@ static void busTick() {
 // Scene table + manager
 // ===========================================================================
 // Bus goes LAST, after Air Quality. Inserting it earlier would rewrite the
-// tap-count muscle memory of three scenes that have not changed in months.
+// tap-count muscle memory of four scenes that have not changed in months.
 static Scene scenes[] = {
   { "Clock",       35000, clockEnter,   clockTick, clockExit },
   { "Weather",     12000, weatherEnter, weatherTick, nullptr },

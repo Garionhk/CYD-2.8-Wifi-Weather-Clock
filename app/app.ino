@@ -1,8 +1,9 @@
 // ===========================================================================
 // CYD Clock & Weather Station -- application (ESP32-2432S028R, 2.8")
 // ===========================================================================
-// Four scenes on a continuous rotation, with touch: tap to advance, long press
-// to pin, and a 4 s hold to re-run touch calibration (plan §6).
+// Five scenes on a continuous rotation, with touch: tap to advance, long press
+// to pin, and a 4 s hold to re-run touch calibration (plan §6). Which scenes are
+// in the rotation, and how long each holds, come from the settings page.
 //
 // Board facts come from board.h, display settings from TFT_eSPI's User_Setup.h
 // (ILI9341_2, TFT_INVERSION_ON, USE_HSPI_PORT, 55 MHz -- docs/stage0_results.md).

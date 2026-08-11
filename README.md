@@ -1,22 +1,30 @@
 # CYD Clock & Weather Station
 
 Firmware for a **"cheap yellow display"** ESP32 board: a wall/desk clock that
-rotates continuously between clock, weather, sun/moon and air-quality scenes,
-with a touch panel for advancing, pinning and setup.
+rotates continuously between clock, weather, sun/moon, air-quality and
+next-bus scenes, with a touch panel for advancing, pinning and setup.
 
 **Flash it and configure it from your phone** — there is nothing to edit before
-building. WiFi, location, timezone and units are set from a web page the device
-serves itself and stores in flash, so the same binary works for anyone.
+building. WiFi, location, timezone, units, which screens appear and for how long
+are all set from a web page the device serves itself and stores in flash, so the
+same binary works for anyone.
 
 **No API key.** Weather and air quality come from Open-Meteo. Sun, moon phase and
 golden hour are computed on the device, so they stay right with the network down.
+
+**下一班車 / Next Bus** shows the next Hong Kong bus or minibus at up to four
+stops, in Traditional Chinese, from the government's open data (KMB/Long Win,
+Citybus and green minibus). Switch it off if you are not in Hong Kong — every
+screen is optional.
 
 **Target board: ESP32-2432S028R** — 2.8" 240×320 ILI9341, resistive touch
 (XPT2046), micro-USB *and* USB-C. The earlier 2.4" ESP32-2432S024R is still
 supported by the same code via `CYD_BOARD` in `config/board.h`.
 
-See [plan.md](plan.md) for the full design and [docs/](docs) for what the
-hardware actually turned out to do.
+[CHANGELOG.md](CHANGELOG.md) is what shipped, [docs/decisions.md](docs/decisions.md)
+is why it was built that way, and [plan.md](plan.md) is the original v1 design
+the rest still cites by section. [docs/](docs) has what the hardware actually
+turned out to do.
 
 ---
 
@@ -54,7 +62,8 @@ calibration wizard, then shows a setup screen:
 
 Join that network and a settings page opens by itself (it's a captive portal).
 Fill in your WiFi, location, timezone and units, press save, and the clock
-restarts and connects. See [Configuration](#configuration) for what each field
+restarts and connects. Screens and bus stops are set from the same page later,
+once the clock is on your own network. See [Configuration](#configuration) for what each field
 means and how to find your coordinates.
 
 Afterwards the settings page stays available on your normal network — the clock
@@ -89,7 +98,7 @@ FQBN=esp32:esp32:esp32:PartitionScheme=huge_app,UploadSpeed=115200 ./tools/flash
 
 Keep `PartitionScheme=huge_app` in there — an `FQBN` override **replaces** the
 default wholesale, and without it the app is squeezed back into the 1.31 MB
-slot at 93% full.
+slot, which it no longer fits in at all.
 
 115200 works consistently; the cost is about a minute for a full app image
 instead of ten seconds. 460800 is worth a try as a middle ground. If you flash
@@ -104,9 +113,10 @@ the slow speed as the fallback rather than the default.
 ## Configuration
 
 **Nothing is configured at compile time.** There is no `config.h` — WiFi,
-location, timezone and units are set from a web page and stored in the ESP32's
-NVS flash, alongside the touch calibration and for the same reason: re-flashing
-to change a setting is a poor repair path for something hanging on a wall.
+location, timezone, units, bus stops, and which screens appear and for how long
+are set from a web page and stored in the ESP32's NVS flash, alongside the touch
+calibration and for the same reason: re-flashing to change a setting is a poor
+repair path for something hanging on a wall.
 
 The practical consequence is that **the built binary contains nothing personal**,
 so the same image can be handed to anyone. (It also removes a whole class of
@@ -228,12 +238,22 @@ converts at draw time, so switching never touches stored or fetched data.
 
 ### What is stored, and where
 
-Everything lives in the ESP32's NVS flash, in two namespaces:
+Two NVS namespaces, plus a filesystem partition:
 
-| Namespace | Holds | Set by |
+| Where | Holds | Set by |
 |---|---|---|
-| `cydcfg` | WiFi credentials, latitude/longitude, timezone, units | the settings page |
-| `cydtouch` | touch calibration | the on-device wizard |
+| NVS `cydcfg` | WiFi credentials, latitude/longitude, timezone, units, the four bus stops, which screens are on and their dwell times | the settings page |
+| NVS `cydtouch` | touch calibration | the on-device wizard |
+| LittleFS `/l/` | the baked Chinese stop-name images | your browser, via the settings page |
+
+The split matters. NVS keeps the stop **text** — Chinese *and* English — while
+LittleFS keeps only the **picture** of it, because the device has no CJK font
+and cannot draw the text itself (see [Next Bus](#next-bus)). If the
+picture is missing the scene falls back to the English name rather than going
+blank, so nothing is ever lost, only translated.
+
+`huge_app` leaves an 896 KB filesystem partition otherwise unused, which is why
+the images go there rather than into the 20 KB of NVS.
 
 Saving restarts the device. Applying WiFi, timezone, location and units live
 would each need a different refresh path; a restart takes about three seconds and
@@ -275,6 +295,58 @@ the settings page never touches what was fetched.
 The clock screen also carries a dim footer with the settings page's address —
 see [Configuration](#configuration).
 
+### Choosing which screens appear
+
+The **Screens** section of the settings page lists all five with a tickbox and a
+time each (4–600 s). Untick one and the rotation skips it and it loses its dot in
+the status strip; its time is remembered for when you tick it back on.
+
+At least one screen has to stay on, and the form refuses to save otherwise. That
+is not pedantry: with nothing left to draw the panel would sit frozen on the last
+frame it painted, and the address of the page that could undo it is itself
+printed by a screen.
+
+<a id="next-bus"></a>
+
+### 下一班車 / Next Bus
+
+The next bus or minibus at up to four Hong Kong stops. Two large rows so it reads
+from across a room, paging between them every 6 s when more than two are
+configured.
+
+| | |
+|---|---|
+| **Operators** | 九巴 KMB, 龍運 Long Win, 城巴 Citybus, 綠色小巴 green minibus |
+| **The badge** | route number in the operator's own livery, sliding along a rail toward the stop as the bus approaches. Hollow means the time came from a timetable, not a live prediction |
+| **The number** | minutes, floored — understating is the safe direction for something you are about to run for |
+
+Add stops from the settings page: pick an operator, type a route number, then
+choose a direction and a stop. Nothing is typed by hand — the picker resolves
+route numbers to stop IDs in **your browser**, and only the resolved IDs are
+stored on the device.
+
+Two consequences of that worth knowing:
+
+- **Route lookup needs internet access**, which the device's own setup AP does
+  not have. The bus section is therefore hidden while the device is in AP mode;
+  configured stops are kept untouched. Connect the clock to your WiFi and open
+  its settings page from there to change them.
+- **Stop names are drawn as images, baked by your browser.** TFT_eSPI has no CJK
+  font, and embedding one costs 1.35 MB at a size too small to read across a room
+  (2.04 MB at a size that isn't, which does not fit at all). So the ~18 fixed
+  words the firmware needs are baked at build time, and *your* stop names are
+  rasterised by your browser and uploaded. See [docs/decisions.md](docs/decisions.md).
+
+The settings page previews each name **exactly as the panel will draw it** —
+1-bit, at the real size — and lets you edit the text, because operator stop names
+are written for a route database rather than a wall. `洪水橋(洪福邨)總站 (YL900)`
+is one stop; `洪水橋` is what you actually read.
+
+ETAs are stored as **absolute times**, not countdowns, and recomputed every
+second. So a five-minute-old fetch still shows the right number, and pulling the
+network out mid-scene leaves the display counting down correctly with only the
+freshness indicator changing colour.
+
 Today's high and low ride along on the same weather request via `&daily=`, so
 they cost no extra fetch. `timezone=auto` on that URL is what makes the daily
 bucket the local calendar day rather than a UTC one. They render as an amber ▲ /
@@ -286,7 +358,7 @@ is simply absent rather than showing a stray `0°`.
 
 | Gesture | Action |
 |---|---|
-| Tap | Advance to the next scene, and freeze auto-rotation for 45 s |
+| Tap | Advance to the next scene, and freeze auto-rotation for 45 s (60 s onto Next Bus — you tap there to watch a countdown, not to read a number once) |
 | Hold 0.8–4 s | Pin the current scene until pressed again |
 | Hold > 4 s | Re-run touch calibration |
 | **Hold through power-on** | Force setup mode — see [Forcing setup mode](#forcing-setup-mode) |
@@ -400,19 +472,26 @@ tools/
   sync_shared.sh          push board.h into every sketch folder
   build_all.sh            compile every sketch in one command
   flash.sh                compile + upload + serial monitor for one sketch
+  gen_zh_labels.py        regenerate app/zh_labels.* from a system CJK font
+  test_bus_parse.sh       host-side check of the ETA timestamp parser
+  test_scenes.sh          host-side check of the scene rotation helpers
 app/
   app.ino                 setup/loop: display, touch, WiFi, time, scene machine
   settings.*              runtime user config (WiFi/location/TZ/units) in NVS
   webconfig.*             settings web UI + captive portal, STA and AP modes
   touch.*                 XPT2046 input: polling, gestures, NVS calibration
   calibrate.*             on-screen touch calibration wizard
-  scenes.*                scene machine + all four scenes, tap/pin handling
+  scenes.*                scene machine + all five scenes, tap/pin handling
   status_strip.*          persistent bottom strip (time/WiFi/freshness/pin/dots)
   theme.h                 layout geometry + colour palette + shared `tft`
   app_data.h              global data model (plan §5.1)
   time_manager.*          SNTP + local-time helpers
   weather.*               Open-Meteo current + daily hi/lo + UV (15 min, backoff)
   airquality.*            Open-Meteo air-quality scheduler (30 min, backoff)
+  bus.*                   HK bus/minibus ETAs: KMB/LWB, Citybus, GMB
+  labels.*                1-bit Chinese text: baked vocabulary + LittleFS store
+  zh_labels.*             generated -- the baked fixed vocabulary (do not edit)
+  bus_js.h                the route picker + label baker, served at /bus.js
   sun_moon.*              local NOAA sun/moon math (no API)
   units.h                 metric↔imperial display conversion
 docs/
@@ -447,18 +526,23 @@ from the device's web UI, so nothing user-specific is compiled in at all.
 
 ## Toolchain
 
-- **Arduino-ESP32** core 2.0.7 — board `esp32:esp32:esp32` ("ESP32 Dev Module")
-- `TFT_eSPI` 2.5.43, `XPT2046_Touchscreen` 1.4, `ArduinoJson` **6**.17.2
-  (`WiFi` / `WiFiClientSecure` / `HTTPClient` / `Preferences` / `time.h` ship
-  with the core)
+- **Arduino-ESP32** core 3.3.10 — board `esp32:esp32:esp32` ("ESP32 Dev Module")
+- `TFT_eSPI` 2.5.43, `XPT2046_Touchscreen` 1.4, `ArduinoJson` 7.4.3
+  (`WiFi` / `WiFiClientSecure` / `HTTPClient` / `Preferences` / `LittleFS` /
+  `mbedtls` / `time.h` all ship with the core)
+- **ArduinoJson 6 or 7 both work.** `weather.cpp` and `airquality.cpp` still use
+  v6's `DynamicJsonDocument`, which v7 accepts as a deprecated alias; `bus.cpp`
+  uses v7's `JsonDocument`. The mixture is deliberate rather than untidy — on v7
+  the capacity argument to `DynamicJsonDocument` is ignored, so writing one in
+  new code would state a memory bound that is not real.
 - The `tools/*.sh` scripts use the `arduino-cli` bundled inside Arduino IDE 2
   when there isn't one on `PATH` — nothing extra to install.
 - **Partition scheme: `huge_app`**, set as the default FQBN in both scripts.
 
 ### Why huge_app
 
-With the web UI the app is ~1.22 MB, against the default scheme's 1.31 MB app
-slot — 93% full, with no room to grow. `huge_app` gives it 3 MB (38% full) by
+With the web UI and the bus scene the app is ~1.32 MB, which does not fit the
+default scheme's 1.31 MB app slot at all. `huge_app` gives it 3 MB (41% full) by
 dropping the second OTA slot, which costs nothing here: OTA is a documented
 non-goal (plan §1).
 
@@ -467,6 +551,9 @@ or the build will be tight and eventually won't fit.
 
 Switching schemes is safe for your settings: `nvs` sits at `0x9000` size
 `0x5000` in both, so stored WiFi credentials and touch calibration survive.
+
+`huge_app` also carries an 896 KB filesystem partition that nothing used until
+the bus scene's Chinese stop-name images needed somewhere to live.
 
 ArduinoJson is **v6** here, so `DynamicJsonDocument` is correct and the plan's
 v7 `JsonDocument` syntax is not. Two other plan snippets are also wrong for this
@@ -503,8 +590,31 @@ default upload speed, not a bad image — retry at 115200. See
 [Upload speed](#upload-speed) for the command, and note it has to carry the
 partition scheme too.
 
-**The build suddenly reports ~93% flash.** You overrode `FQBN` without keeping
-`PartitionScheme=huge_app`. Any override has to include it — see
+**The build suddenly reports ~93% flash, or won't fit.** You overrode `FQBN`
+without keeping `PartitionScheme=huge_app`. Any override has to include it — see
 [Why huge_app](#why-huge_app).
+
+**Bus stop names show in English instead of Chinese.** The image was never
+baked, or was erased. Open the settings page and press **Save & restart** — your
+browser re-bakes and re-uploads them; you don't have to pick the routes again.
+This is the designed fallback, not a fault: the text lives in NVS in both
+languages, so the row is never blank.
+
+**The bus screen says 無服務 (no service) when a bus is definitely due.** Most
+likely the direction is wrong — a stop served both ways looks identical in the
+picker. Re-pick the other direction. If a slot shows nothing for six hours
+straight it changes to 檢查車站 ("check the stop") on its own, because a stale
+stop ID and a quiet night are indistinguishable in any single response.
+
+**The bus section is missing from the settings page.** You are on the device's
+own `CYD-Setup-XXXX` network, which has no route to the internet, so route
+lookup cannot work. Configured stops are kept — connect the clock to your WiFi
+and open its settings page from there.
+
+**A screen never appears in the rotation.** Check its tickbox under **Screens**
+on the settings page.
+
+**The bus screen says 未校時 ("clock not set").** NTP hasn't synced, so there is
+no "now" to count down from. It resolves itself once the network is up.
 
 **No serial port appears at all.** Charge-only cable, or a missing CH340 driver.

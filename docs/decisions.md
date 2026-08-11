@@ -2,6 +2,35 @@
 
 Running log of choices that change scope or architecture. Newest first.
 
+## 2026-08-10 — The rotation is the owner's, not the firmware's
+
+**Context.** The scene table carried both the list of scenes and each one's
+dwell as compile-time constants. Adding a fifth scene made that untenable: the
+bus scene is useless outside Hong Kong, and "re-flash to stop it appearing" is
+the exact repair path this project has twice rejected — once for touch
+calibration, once for WiFi credentials.
+
+**Decision.** `sceneOn[]` and `sceneDwellS[]` in NVS, edited from a **Screens**
+section on the settings page. The table's `dwellMs` degrades to a default for a
+device that has never saved. Two short strings (`"11011"`, `"35,12,12,12,12"`)
+rather than ten keys, and a stored record shorter than `SCENE_SLOTS` leaves the
+newer entries at their compiled defaults — so adding a scene later needs no
+migration.
+
+**The failure this had to design out.** Every scene switched off leaves the
+panel frozen on its last frame, and the address of the settings page that could
+undo it is *itself printed by a scene*. The device would be unrecoverable
+without a serial cable or the boot-time touch override. So it is refused at the
+form, and unreachable at runtime even if a stored record says otherwise:
+`sceneOn()` forces scene 0 back on when nothing else is enabled. Belt and
+braces, because only one of them is in the same binary as the failure.
+
+**Consequence.** `sceneManager_index()` and `_count()` now describe the
+*rotation*, not the table, so the status strip draws one dot per screen you will
+actually see. A `static_assert` ties `SCENE_SLOTS` to the table length, making
+"added a scene and forgot the settings array" a build error rather than a
+silently ignored setting.
+
 ## 2026-08-10 — Chinese is baked to 1-bit bitmaps, not an embedded font
 
 **Context.** The bus scene shows Hong Kong stop names, destinations and status

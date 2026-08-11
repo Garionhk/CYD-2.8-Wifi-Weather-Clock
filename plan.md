@@ -1,5 +1,16 @@
 # CYD Clock & Weather Station — Implementation Plan
 
+> **Historical.** This is the original v1 plan, written against the 2.4"
+> ESP32-2432S024R before Stage 0 had run. It is kept because the rest of the
+> codebase still cites it by section (plan §5.1, §7, §9 …) and because the
+> reasoning behind the architecture has not changed.
+>
+> What it does **not** describe is everything decided since: the move to the 2.8"
+> board, touch coming back into scope, settings moving from `config.h` to a web
+> page, and the fifth scene. For what actually shipped, read
+> [CHANGELOG.md](CHANGELOG.md); for *why* it diverged, read
+> [docs/decisions.md](docs/decisions.md), which is the living record.
+
 Target board: ESP32 2.4" 240×320 TFT module with **resistive touch** (ESP32-2432S024R family,
 to be confirmed — see Stage 0).
 Framework: Arduino-ESP32.
