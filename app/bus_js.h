@@ -117,6 +117,13 @@ static const char BUS_JS[] PROGMEM = R"JS(
     if (text != null) e.textContent = text;
     return e;
   }
+  // Origin on the left, destination on the right, in the direction of travel.
+  // The reverse -- "往 <dest> ← <orig>" -- put the arrow and the destination
+  // first, which reads backwards against the line you are about to board.
+  function dirLabel(orig, dest) {
+    return (orig || '?') + '  →  ' + (dest || '?');
+  }
+
   function select(options, placeholder) {
     var s = el('select');
     s.appendChild(el('option', { value: '' }, placeholder));
@@ -328,7 +335,7 @@ static const char BUS_JS[] PROGMEM = R"JS(
       // Labelled by destination first, then origin: 68X has four variants and
       // two of them share a destination, so origin is what tells them apart.
       var opts = found.map(function (f, n) {
-        return { v: n, label: '往 ' + f.d.dest_tc + '  ← ' + f.d.orig_tc };
+        return { v: n, label: dirLabel(f.d.orig_tc, f.d.dest_tc) };
       });
       var s = select(opts, 'Choose direction / variant…');
       s.onchange = function () {
@@ -379,8 +386,8 @@ static const char BUS_JS[] PROGMEM = R"JS(
       if (!d || !d.route) { self.status('No such route.'); return; }
       self.status('');
       var opts = [
-        { v: 'outbound', label: '往 ' + d.dest_tc + '  ← ' + d.orig_tc },
-        { v: 'inbound',  label: '往 ' + d.orig_tc + '  ← ' + d.dest_tc }
+        { v: 'outbound', label: dirLabel(d.orig_tc, d.dest_tc) },
+        { v: 'inbound',  label: dirLabel(d.dest_tc, d.orig_tc) }
       ];
       var s = select(opts, 'Choose direction…');
       s.onchange = function () {
@@ -437,7 +444,7 @@ static const char BUS_JS[] PROGMEM = R"JS(
           flat.push({ r: r, dir: dir });
           opts.push({
             v: flat.length - 1,
-            label: '往 ' + dir.dest_tc + '  ← ' + dir.orig_tc +
+            label: dirLabel(dir.orig_tc, dir.dest_tc) +
                    (rs.length > 1 ? '  (' + r.description_tc + ')' : '')
           });
         });
