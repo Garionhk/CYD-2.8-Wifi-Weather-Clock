@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+## v2.1.0 — 下一班車, and a settings page for everything — 2026-08-10
+
+Adds a fifth scene showing the next Hong Kong bus or minibus, and moves the
+last of the compile-time configuration onto a page the device serves itself.
+Nothing user-specific is baked into the binary any more, so this image can be
+handed to anyone.
+
+Flashing `cyd-clock-weather-v2.1.0-4mb.bin` at `0x0` is a **factory reset** —
+it erases stored settings and touch calibration along with everything else. To
+update an existing device and keep them, upload the application only with
+`./tools/flash.sh app`. See `flash.md`.
+
 ### Added
 
 - **A fifth scene: 下一班車 / Next Bus.** The next Hong Kong bus or minibus at up

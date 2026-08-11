@@ -83,7 +83,7 @@ chances to get an offset wrong, for no benefit.
 Rename it to something meaningful before uploading, e.g.:
 
 ```bash
-cp app/build/esp32.esp32.esp32/app.ino.merged.bin cyd-clock-weather-v1.0.0-4mb.bin
+cp app/build/esp32.esp32.esp32/app.ino.merged.bin cyd-clock-weather-v2.1.0-4mb.bin
 ```
 
 The application is about 38% of the 3 MB app partition, so there is plenty of
@@ -100,7 +100,7 @@ padded with `0xFF`, and that padding covers the NVS partition at `0x9000` and
 the LittleFS partition at `0x310000`. Writing it at `0x0` erases both.
 
 ```
-$ python3 -c "d=open('cyd-clock-weather-v1.0.0-4mb.bin','rb').read(); \
+$ python3 -c "d=open('cyd-clock-weather-v2.1.0-4mb.bin','rb').read(); \
               print(len(d), set(d[0x9000:0x9040]), set(d[0x310000:0x310040]))"
 4194304 {255} {255}
 ```
@@ -190,7 +190,7 @@ Publish a checksum alongside the binary, generated from the renamed file you are
 actually uploading:
 
 ```bash
-shasum -a 256 cyd-clock-weather-v1.0.0-4mb.bin > SHA256SUMS
+shasum -a 256 cyd-clock-weather-v2.1.0-4mb.bin > SHA256SUMS
 ```
 
 ---
@@ -243,7 +243,7 @@ esptool --port /dev/cu.usbserial-1440 erase-flash
 Then write the firmware — one file, one address:
 
 ```bash
-esptool --port /dev/cu.usbserial-1440 --baud 460800 write-flash 0x0 cyd-clock-weather-v1.0.0-4mb.bin
+esptool --port /dev/cu.usbserial-1440 --baud 460800 write-flash 0x0 cyd-clock-weather-v2.1.0-4mb.bin
 ```
 
 That is the whole job. **An ESP32 is not flashed like an ESP8266** — it needs a
