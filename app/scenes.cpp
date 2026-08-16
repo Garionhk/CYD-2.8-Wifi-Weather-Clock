@@ -4,6 +4,8 @@
 #include "app_data.h"
 #include "units.h"
 #include "sun_moon.h"
+#include "webconfig.h"
+#include <WiFi.h>
 #include <time.h>
 #include <math.h>
 
@@ -24,6 +26,7 @@ static bool  sprReady = false;
 static int   pDig[4]  = { -2, -2, -2, -2 };   // previous digit values
 static int   pColon   = -1;                   // -1 forces first draw
 static char  pDate[32] = "";
+static char  pNet[48]  = "";                  // settings-page address footer
 
 static void drawDigit(int idx, int val) {
   // Render one digit centred in its cell. Falls back to direct TFT drawing if
@@ -52,6 +55,18 @@ static void drawColon(bool on) {
   tft.fillCircle(COLON_X, DIGIT_TOP_Y + 56, 5, c);
 }
 
+// Where to reach the settings page. Printed on the clock because there is
+// otherwise no way to find it without a serial monitor or the router's client
+// list -- and in AP mode, no way to know the network name to join either.
+static void netFooter(char* out, size_t n) {
+  if (webconfig_isAP())
+    snprintf(out, n, "setup: %s / %s", webconfig_apSsid().c_str(), webconfig_ip().c_str());
+  else if (WiFi.status() == WL_CONNECTED)
+    snprintf(out, n, "setup: %s", webconfig_ip().c_str());
+  else
+    snprintf(out, n, "wifi offline");
+}
+
 static void clockEnter() {
   tft.fillRect(0, 0, SCREEN_W, CONTENT_H, COL_BG);
 
@@ -67,6 +82,7 @@ static void clockEnter() {
   for (int i = 0; i < 4; i++) pDig[i] = -2;
   pColon = -1;
   pDate[0] = '\0';
+  pNet[0]  = '\0';
 }
 
 static void clockTick() {
@@ -98,6 +114,20 @@ static void clockTick() {
     tft.setTextFont(4);
     tft.drawString(buf, SCREEN_W / 2, DATE_Y);
     strncpy(pDate, buf, sizeof(pDate));
+  }
+
+  // Footer: where the settings page lives. Same compare-and-redraw idiom as the
+  // date, so it only costs SPI when the address actually changes -- which is
+  // essentially never once the network is up.
+  char net[48];
+  netFooter(net, sizeof(net));
+  if (strcmp(net, pNet) != 0) {
+    tft.fillRect(0, NET_Y - 8, SCREEN_W, 16, COL_BG);
+    tft.setTextColor(COL_DIM, COL_BG);
+    tft.setTextDatum(MC_DATUM);
+    tft.setTextFont(2);
+    tft.drawString(net, SCREEN_W / 2, NET_Y);
+    strncpy(pNet, net, sizeof(pNet));
   }
 }
 

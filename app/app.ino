@@ -15,7 +15,8 @@
 #include <TFT_eSPI.h>
 
 #include "board.h"
-#include "config.h"
+#include "settings.h"
+#include "webconfig.h"
 #include "theme.h"
 #include "app_data.h"
 #include "time_manager.h"
@@ -46,19 +47,87 @@ static void bootMessage(const char* msg) {
   tft.drawString(msg, SCREEN_W / 2, CONTENT_H / 2);
 }
 
-static void connectWiFi() {
+// How long the station has to stay down before the setup AP is raised alongside
+// it. Long enough to ride out a router reboot without the AP appearing and
+// vanishing; short enough that a real problem is fixable without a power cycle.
+static const uint32_t AP_FALLBACK_MS = 2UL * 60 * 1000;
+
+static bool connectWiFi() {
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
-  Serial.printf("WiFi: connecting to \"%s\"", WIFI_SSID);
+  WiFi.begin(g_settings.wifiSsid.c_str(), g_settings.wifiPass.c_str());
+  Serial.printf("WiFi: connecting to \"%s\"", g_settings.wifiSsid.c_str());
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 15000) {
     delay(300);
     Serial.print(".");
   }
-  if (WiFi.status() == WL_CONNECTED)
+  if (WiFi.status() == WL_CONNECTED) {
     Serial.printf(" ok  IP %s  RSSI %d\n", WiFi.localIP().toString().c_str(), WiFi.RSSI());
-  else
-    Serial.println(" TIMEOUT (clock still runs; will retry in loop)");
+    return true;
+  }
+  Serial.println(" TIMEOUT");
+  return false;
+}
+
+// Full-screen instructions for the setup portal. Everything needed to finish
+// setup has to be on the panel itself -- a device that can't reach the network
+// can't tell you anything any other way.
+static void setupScreen(const char* headline) {
+  tft.fillScreen(COL_BG);
+  tft.setTextDatum(MC_DATUM);
+  tft.setTextColor(COL_ACCENT, COL_BG);
+  tft.setTextFont(4);
+  tft.drawString(headline, SCREEN_W / 2, 30);
+
+  tft.setTextFont(2);
+  tft.setTextColor(COL_DIM, COL_BG);
+  tft.drawString("1. Join this WiFi network", SCREEN_W / 2, 70);
+  tft.setTextColor(COL_TEXT, COL_BG);
+  tft.setTextFont(4);
+  tft.drawString(webconfig_apSsid(), SCREEN_W / 2, 95);
+
+  tft.setTextFont(2);
+  tft.setTextColor(COL_DIM, COL_BG);
+  tft.drawString("2. The setup page opens automatically,", SCREEN_W / 2, 128);
+  tft.drawString("or browse to", SCREEN_W / 2, 144);
+  tft.setTextColor(COL_TEXT, COL_BG);
+  tft.setTextFont(4);
+  tft.drawString("http://" + webconfig_ip(), SCREEN_W / 2, 170);
+}
+
+// A finger held through boot forces the setup portal. Sampled with
+// touch_readRaw rather than touch_isDown(): the gesture state machine only
+// updates on touch_poll(), which has not started running yet. Ten samples so a
+// single noise spike can't strand a working device in setup.
+static bool touchHeldAtBoot() {
+  int rx, ry, z, hits = 0;
+  for (int i = 0; i < 10; i++) {
+    if (touch_readRaw(rx, ry, z)) hits++;
+    delay(20);
+  }
+  return hits >= 8;
+}
+
+// Blocking setup portal, used when nothing has ever been configured.
+//
+// Unlike calibrate_run(), this deliberately has NO timeout. The appliance rule
+// in docs/decisions.md exists because calibration has a useful fallback (the
+// default mapping). An unprovisioned device has none: no credentials means no
+// WiFi, no NTP and therefore no clock, so there is nothing to fall back TO.
+// A screen that says how to fix it is the most useful state available.
+static void runSetupPortal() {
+  webconfig_beginAP();
+  setupScreen("Setup");
+  Serial.println("setup: waiting for configuration (no timeout by design)");
+
+  while (!webconfig_saved()) {
+    webconfig_tick();
+    delay(5);
+  }
+
+  bootMessage("Saved -- restarting");
+  delay(1500);
+  ESP.restart();
 }
 
 void setup() {
@@ -78,11 +147,28 @@ void setup() {
   touch_begin();
   if (!touch_hasStoredCalibration()) calibrate_run(true);
 
+  settings_begin();
+
+  // Forced setup is the recovery path for the one case the settings page can't
+  // fix itself: the device is configured for a network that no longer exists,
+  // so nothing can reach it.
+  if (!g_settings.provisioned || touchHeldAtBoot()) {
+    runSetupPortal();          // does not return -- restarts after a save
+  }
+
   bootMessage("Connecting WiFi...");
-  connectWiFi();
+  if (connectWiFi()) {
+    webconfig_beginSTA();
+  } else {
+    // Failure stays non-fatal, as it always has been: the clock, sun/moon math
+    // and touch all work offline. AP_STA means the portal is reachable to fix
+    // the credentials while loop()'s reconnect keeps retrying the real network.
+    Serial.println("WiFi: no connection -- starting setup AP (clock still runs)");
+    webconfig_beginAP();
+  }
 
   bootMessage("Syncing time...");
-  timeManager_begin(TZ_STRING);
+  timeManager_begin(g_settings.tz.c_str());
   // Give NTP a few seconds so the clock shows real time on first paint; not
   // fatal if it misses -- the clock renders "----" and fills in once synced.
   struct tm t;
@@ -112,6 +198,17 @@ void loop() {
     statusStrip_tick(false);      // reflect pin/freeze immediately, not in 500 ms
   }
 
+  // Settings page: cheap when idle, and the delay(5) below leaves ample slack.
+  webconfig_tick();
+  if (webconfig_saved()) {
+    // Applying WiFi, timezone, location and units live would each need a
+    // different refresh path; a restart costs ~3 s and cannot leave the device
+    // half-configured.
+    bootMessage("Saved -- restarting");
+    delay(1500);
+    ESP.restart();
+  }
+
   sceneManager_tick();
   weather_tick();       // fetches when due (first fetch shortly after boot)
   airquality_tick();    // AQI fetch, staggered ~5 s after weather
@@ -130,6 +227,29 @@ void loop() {
   if (WiFi.status() != WL_CONNECTED && millis() - lastWifiTry >= 10000) {
     lastWifiTry = millis();
     WiFi.reconnect();
+  }
+
+  // WiFi lost after a good boot -- a replaced router, or a changed password.
+  // Without this the settings page becomes unreachable until someone power
+  // cycles the device, which is a poor ask for something mounted on a wall.
+  // The grace period keeps a router reboot or a brief dropout from flapping the
+  // AP up and down.
+  static uint32_t staDownSince = 0;
+  if (WiFi.status() != WL_CONNECTED) {
+    if (staDownSince == 0) staDownSince = millis();
+    if (!webconfig_isAP() && millis() - staDownSince >= AP_FALLBACK_MS) {
+      Serial.println("WiFi: down for 2 min -- raising setup AP");
+      webconfig_beginAP();
+    }
+  } else {
+    staDownSince = 0;
+  }
+
+  // The fallback AP has done its job once the real network comes back. Dropping
+  // it frees the radio from AP_STA and returns the clock footer to the LAN IP.
+  if (webconfig_isAP() && WiFi.status() == WL_CONNECTED) {
+    webconfig_stopAP();
+    webconfig_beginSTA();
   }
 
   // 5 ms keeps touch sampling well inside the debounce window while leaving

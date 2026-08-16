@@ -1,5 +1,5 @@
 #include "weather.h"
-#include "config.h"
+#include "settings.h"
 #include "app_data.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -20,8 +20,8 @@ static bool doFetch() {
   client.setInsecure();
 
   HTTPClient https;
-  String url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(LATITUDE, 4) +
-               "&longitude=" + String(LONGITUDE, 4) +
+  String url = "https://api.open-meteo.com/v1/forecast?latitude=" + String(g_settings.latitude, 4) +
+               "&longitude=" + String(g_settings.longitude, 4) +
                "&current=temperature_2m,apparent_temperature,weather_code,cloud_cover,"
                "relative_humidity_2m,wind_speed_10m,surface_pressure,uv_index"
                "&daily=temperature_2m_max,temperature_2m_min&forecast_days=1"

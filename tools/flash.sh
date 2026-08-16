@@ -17,7 +17,8 @@ set -o pipefail   # not -u: bash 3.2 (macOS stock) trips over empty arrays
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-FQBN="${FQBN:-esp32:esp32:esp32}"
+# See build_all.sh: the app needs huge_app's 3 MB slot, not default.csv's 1.31 MB.
+FQBN="${FQBN:-esp32:esp32:esp32:PartitionScheme=huge_app}"
 BAUD="${BAUD:-115200}"
 
 SKETCH="${1:-}"

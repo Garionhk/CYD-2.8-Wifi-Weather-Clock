@@ -1,5 +1,5 @@
 #include "airquality.h"
-#include "config.h"
+#include "settings.h"
 #include "app_data.h"
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
@@ -19,7 +19,7 @@ static bool doFetch() {
   HTTPClient https;
   // Note the air-quality host, distinct from the forecast host.
   String url = "https://air-quality-api.open-meteo.com/v1/air-quality?latitude=" +
-               String(LATITUDE, 4) + "&longitude=" + String(LONGITUDE, 4) +
+               String(g_settings.latitude, 4) + "&longitude=" + String(g_settings.longitude, 4) +
                "&current=us_aqi,pm2_5&timezone=auto";
 
   if (!https.begin(client, url)) return false;

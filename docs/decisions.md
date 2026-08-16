@@ -2,6 +2,65 @@
 
 Running log of choices that change scope or architecture. Newest first.
 
+## 2026-08-06 — All user settings move to NVS and a web UI; config.h is deleted
+
+**Context.** WiFi credentials, latitude/longitude, timezone and units were
+compile-time `#define`s in `config.h`, included by five translation units. Three
+things followed from that, and the third is what forced the change:
+
+1. Changing any setting meant a rebuild and a reflash.
+2. The binary contained them. `strings app.bin` printed the author's WiFi
+   password, so the firmware could never be shared with anyone.
+3. It caused a real credential leak — see the Security entry in `CHANGELOG.md`.
+
+**Decision.** `config.h` is gone. Settings live in NVS (namespace `cydcfg`,
+`app/settings.*`) and are set from a web page served by the device
+(`app/webconfig.*`).
+
+The server runs in **both** modes, not just during setup:
+
+- **STA connected** — settings page on the LAN IP.
+- **WiFi unavailable** — SoftAP `CYD-Setup-XXXX` plus a DNS captive portal on
+  `192.168.4.1`.
+
+This is the same argument already accepted for touch calibration one entry down:
+re-flashing to change a setting is a poor repair path for something hanging on a
+wall. It generalises from "this panel's constants are wrong on the next unit" to
+"this owner's settings are wrong for the next owner".
+
+**Why the clock screen prints an address.** A settings page nobody can find is
+not a feature. Without it you need a serial monitor or the router's client list,
+so the clock carries a dim footer naming the network and address.
+
+**Where this deliberately breaks the appliance rule.** The rule below says the
+device must never wait on a person who is not there. The first-run setup portal
+has **no timeout**, and that is not an oversight. Calibration times out because
+it has a useful fallback — the previous mapping. An unprovisioned device has
+none: no credentials means no WiFi, no NTP, and therefore no clock. There is
+nothing to fall back *to*, so a screen explaining how to fix it is the most
+useful state available rather than a trap.
+
+A device that has been configured and merely can't reach the network is a
+different case, and keeps the old behaviour: the clock runs offline exactly as
+before, with the setup AP raised alongside it (`WIFI_AP_STA`) so the credentials
+can be corrected. The AP is dropped automatically when the real network returns.
+
+**Recovery path.** Holding a finger on the panel through boot forces setup. That
+covers the one failure the web UI cannot fix itself — the device is joined to a
+network that no longer exists, so nothing can reach it.
+
+**Consequences.**
+- The build needs the `huge_app` partition scheme: with the web UI the app is
+  ~1.22 MB against the default scheme's 1.31 MB slot (93%). `huge_app` gives it
+  3 MB, at the cost of the second OTA slot — already a non-goal. `nvs` is at the
+  same offset in both schemes, so switching preserves stored settings.
+- Saving restarts the device rather than applying live. WiFi, timezone, location
+  and units each need a different refresh path; a ~3 s restart cannot leave the
+  device half-configured.
+- The settings page has no authentication. For a wall clock on a home LAN that
+  is an accepted trade, and it never reveals the stored password — only accepts
+  a new one.
+
 ## 2026-07-22 — Touch calibration lives in NVS, not in the firmware
 
 **Context.** Stage 0.2e produces four raw-to-pixel constants. The obvious next

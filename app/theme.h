@@ -33,6 +33,9 @@ static const int DIGIT_TOP_Y = 28;
 static const int DIGIT_X[4]  = { 28, 88, 172, 232 };
 static const int COLON_X     = 160;
 static const int DATE_Y      = 150;                     // weekday/date line centre
+// Settings-page address, Font 2 (16 px) so it spans 172..188 -- clear of the
+// date band above (134..166) and the content edge at 196.
+static const int NET_Y       = 180;
 
 // ---- Colours (RGB565) -----------------------------------------------------
 static const uint16_t COL_BG         = 0x0000;    // black

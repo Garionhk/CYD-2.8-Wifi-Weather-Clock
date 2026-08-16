@@ -17,7 +17,12 @@ set -uo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-FQBN="${FQBN:-esp32:esp32:esp32}"
+# huge_app, not the default partition scheme: with the web UI the app is ~1.22 MB
+# against default.csv's 1.31 MB app slot (93% full). huge_app gives it 3 MB by
+# dropping the second OTA slot, which costs nothing here -- OTA is a documented
+# non-goal (plan §1). NVS stays at 0x9000/0x5000 in both, so stored touch
+# calibration and settings survive switching between them.
+FQBN="${FQBN:-esp32:esp32:esp32:PartitionScheme=huge_app}"
 
 if command -v arduino-cli >/dev/null 2>&1; then
   CLI="$(command -v arduino-cli)"
