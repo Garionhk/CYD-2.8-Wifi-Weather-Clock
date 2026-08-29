@@ -60,15 +60,23 @@ time_t sunEventUTC(int y, int m, int d, double elevDeg, bool morning) {
   return (time_t)llround(midnightUTCepoch + minutesUTC * 60.0);
 }
 
-const char* moonPhaseName(float p) {
-  if (p < 0.03f || p > 0.97f) return "New Moon";
-  if (p < 0.22f)              return "Waxing Crescent";
-  if (p < 0.28f)              return "First Quarter";
-  if (p < 0.47f)              return "Waxing Gibbous";
-  if (p < 0.53f)              return "Full Moon";
-  if (p < 0.72f)              return "Waning Gibbous";
-  if (p < 0.78f)              return "Last Quarter";
-  return "Waning Crescent";
+MoonPhaseName moonPhaseName(float p) {
+  if (p < 0.03f || p > 0.97f) return MOON_NEW;
+  if (p < 0.22f)              return MOON_WAX_CRE;
+  if (p < 0.28f)              return MOON_FIRST_Q;
+  if (p < 0.47f)              return MOON_WAX_GIB;
+  if (p < 0.53f)              return MOON_FULL;
+  if (p < 0.72f)              return MOON_WAN_GIB;
+  if (p < 0.78f)              return MOON_LAST_Q;
+  return MOON_WAN_CRE;
+}
+
+const char* moonPhaseNameEn(MoonPhaseName p) {
+  static const char* const NAMES[MOON_PHASE_COUNT] = {
+    "New Moon", "Waxing Crescent", "First Quarter", "Waxing Gibbous",
+    "Full Moon", "Waning Gibbous", "Last Quarter", "Waning Crescent",
+  };
+  return (p < MOON_PHASE_COUNT) ? NAMES[p] : "";
 }
 
 // Given a local date's tm, return the next day's date via mktime normalisation.
@@ -82,9 +90,9 @@ static void nextLocalDate(const struct tm& today, int& y, int& mo, int& d) {
   y = out.tm_year + 1900; mo = out.tm_mon + 1; d = out.tm_mday;
 }
 
-void goldenHourStatus(char* buf, size_t n) {
+GoldenHour goldenHourStatus() {
   struct tm t;
-  if (!getLocalTime(&t, 10)) { strncpy(buf, "--", n); return; }
+  if (!getLocalTime(&t, 10)) return { GH_NONE, 0, 0 };
   int y = t.tm_year + 1900, mo = t.tm_mon + 1, d = t.tm_mday;
   time_t now = time(nullptr);
 
@@ -94,8 +102,8 @@ void goldenHourStatus(char* buf, size_t n) {
   time_t eStart = sunEventUTC(y, mo, d,  6.0, false);  // evening window start
   time_t eEnd   = sunEventUTC(y, mo, d, -4.0, false);  // evening window end
 
-  if (mStart && now >= mStart && now <= mEnd) { snprintf(buf, n, "now (%dm)", (int)((mEnd - now) / 60)); return; }
-  if (eStart && now >= eStart && now <= eEnd) { snprintf(buf, n, "now (%dm)", (int)((eEnd - now) / 60)); return; }
+  if (mStart && now >= mStart && now <= mEnd) return { GH_NOW, 0, (int)((mEnd - now) / 60) };
+  if (eStart && now >= eStart && now <= eEnd) return { GH_NOW, 0, (int)((eEnd - now) / 60) };
 
   time_t next = 0;
   if (mStart && mStart > now)      next = mStart;
@@ -104,10 +112,10 @@ void goldenHourStatus(char* buf, size_t n) {
     int ny, nmo, nd; nextLocalDate(t, ny, nmo, nd);
     next = sunEventUTC(ny, nmo, nd, -4.0, true);
   }
-  if (!next) { strncpy(buf, "--", n); return; }
+  if (!next) return { GH_NONE, 0, 0 };
 
-  long secs = next - now;
-  snprintf(buf, n, "in %ldh %02ldm", secs / 3600, (secs % 3600) / 60);
+  const long secs = next - now;
+  return { GH_IN, (int)(secs / 3600), (int)((secs % 3600) / 60) };
 }
 
 void sunmoon_recompute() {
@@ -145,6 +153,7 @@ void sunmoon_recompute() {
     Serial.printf("today   sunrise %s  sunset %s\n", a, b);
     Serial.printf("tomorrow sunrise %s  sunset %s\n", c, e);
     Serial.printf("moon phase %.3f (%s)  illumination %.0f%%\n",
-                  g_data.moonPhase, moonPhaseName(g_data.moonPhase), g_data.moonIlluminationPct);
+                  g_data.moonPhase, moonPhaseNameEn(moonPhaseName(g_data.moonPhase)),
+                  g_data.moonIlluminationPct);
   }
 }

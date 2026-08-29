@@ -19,6 +19,7 @@
 #include "settings.h"
 #include "webconfig.h"
 #include "theme.h"
+#include "uitext.h"
 #include "app_data.h"
 #include "time_manager.h"
 #include "touch.h"
@@ -47,12 +48,14 @@ AppData  g_data;
 #endif
 
 // Centred one-line message on the content area (boot progress).
-static void bootMessage(const char* msg) {
+//
+// On a device that has never been provisioned these come out in English --
+// settings_begin has run by now, but there is nothing stored for it to have
+// read. That is the right way round: the one person guaranteed to see this
+// screen is someone who has not chosen a language yet.
+static void bootMessage(UiText msg) {
   tft.fillRect(0, 0, SCREEN_W, CONTENT_H, COL_BG);
-  tft.setTextColor(COL_TEXT, COL_BG);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextFont(4);
-  tft.drawString(msg, SCREEN_W / 2, CONTENT_H / 2);
+  ui_draw(msg, SCREEN_W / 2, CONTENT_H / 2, LBL_CENTRE, COL_TEXT, COL_BG);
 }
 
 // How long the station has to stay down before the setup AP is raised alongside
@@ -80,26 +83,21 @@ static bool connectWiFi() {
 // Full-screen instructions for the setup portal. Everything needed to finish
 // setup has to be on the panel itself -- a device that can't reach the network
 // can't tell you anything any other way.
-static void setupScreen(const char* headline) {
+static void setupScreen(UiText headline) {
   tft.fillScreen(COL_BG);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(COL_ACCENT, COL_BG);
-  tft.setTextFont(4);
-  tft.drawString(headline, SCREEN_W / 2, 30);
+  ui_draw(headline, SCREEN_W / 2, 30, LBL_CENTRE, COL_ACCENT, COL_BG);
 
-  tft.setTextFont(2);
-  tft.setTextColor(COL_DIM, COL_BG);
-  tft.drawString("1. Join this WiFi network", SCREEN_W / 2, 70);
+  ui_draw(T_SETUP_JOIN, SCREEN_W / 2, 70, LBL_CENTRE, COL_DIM, COL_BG);
   tft.setTextColor(COL_TEXT, COL_BG);
-  tft.setTextFont(4);
+  tft.setTextDatum(MC_DATUM);
+  font_use(UI_FONT_M);
   tft.drawString(webconfig_apSsid(), SCREEN_W / 2, 95);
 
-  tft.setTextFont(2);
-  tft.setTextColor(COL_DIM, COL_BG);
-  tft.drawString("2. The setup page opens automatically,", SCREEN_W / 2, 128);
-  tft.drawString("or browse to", SCREEN_W / 2, 144);
+  ui_draw(T_SETUP_AUTO, SCREEN_W / 2, 128, LBL_CENTRE, COL_DIM, COL_BG);
+  ui_draw(T_SETUP_OR,   SCREEN_W / 2, 144, LBL_CENTRE, COL_DIM, COL_BG);
   tft.setTextColor(COL_TEXT, COL_BG);
-  tft.setTextFont(4);
+  tft.setTextDatum(MC_DATUM);
+  font_use(UI_FONT_M);
   tft.drawString("http://" + webconfig_ip(), SCREEN_W / 2, 170);
 }
 
@@ -125,7 +123,7 @@ static bool touchHeldAtBoot() {
 // A screen that says how to fix it is the most useful state available.
 static void runSetupPortal() {
   webconfig_beginAP();
-  setupScreen("Setup");
+  setupScreen(T_SETUP_TITLE);
   Serial.println("setup: waiting for configuration (no timeout by design)");
 
   while (!webconfig_saved()) {
@@ -133,7 +131,7 @@ static void runSetupPortal() {
     delay(5);
   }
 
-  bootMessage("Saved -- restarting");
+  bootMessage(T_BOOT_SAVED);
   delay(1500);
   ESP.restart();
 }
@@ -161,7 +159,7 @@ void setup() {
   // here, so a first-time user configuring a bus stop needs the filesystem
   // already mounted. The first mount on a device that has never had one formats
   // the partition and takes a couple of seconds, hence the message.
-  bootMessage("Preparing storage...");
+  bootMessage(T_BOOT_STORAGE);
   label_begin();
 #ifdef BUS_LABEL_SELFTEST
   label_selfTest(8000);
@@ -174,7 +172,7 @@ void setup() {
     runSetupPortal();          // does not return -- restarts after a save
   }
 
-  bootMessage("Connecting WiFi...");
+  bootMessage(T_BOOT_WIFI);
   if (connectWiFi()) {
     webconfig_beginSTA();
   } else {
@@ -185,7 +183,7 @@ void setup() {
     webconfig_beginAP();
   }
 
-  bootMessage("Syncing time...");
+  bootMessage(T_SYNCING);
   timeManager_begin(g_settings.tz.c_str());
   // Give NTP a few seconds so the clock shows real time on first paint; not
   // fatal if it misses -- the clock renders "----" and fills in once synced.
@@ -223,7 +221,7 @@ void loop() {
     // Applying WiFi, timezone, location and units live would each need a
     // different refresh path; a restart costs ~3 s and cannot leave the device
     // half-configured.
-    bootMessage("Saved -- restarting");
+    bootMessage(T_BOOT_SAVED);
     delay(1500);
     ESP.restart();
   }

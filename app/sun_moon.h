@@ -14,11 +14,34 @@
 // Prints the results to Serial once per boot for offline almanac verification.
 void sunmoon_recompute();
 
-// Human-readable moon phase name for a phase in [0,1] (0/1 = new, 0.5 = full).
-const char* moonPhaseName(float phase);
+// Which of the eight phases a value in [0,1] falls in (0/1 = new, 0.5 = full).
+//
+// An enum rather than a string, and a struct below rather than a formatted
+// line, because both of these are read out in whichever language the panel is
+// set to. Keeping the wording out of here is what lets this file stay pure
+// almanac maths with no dependency on the display at all -- scenes.cpp maps
+// these onto UiText ids, and nothing else needs to know they have names.
+enum MoonPhaseName : uint8_t {
+  MOON_NEW, MOON_WAX_CRE, MOON_FIRST_Q, MOON_WAX_GIB,
+  MOON_FULL, MOON_WAN_GIB, MOON_LAST_Q, MOON_WAN_CRE,
+  MOON_PHASE_COUNT
+};
+MoonPhaseName moonPhaseName(float phase);
 
-// Write a golden-hour status string ("now (12m)", "in 1h 20m", ...) into buf.
-void goldenHourStatus(char* buf, size_t n);
+// English name for one, for the boot-time almanac trace on serial. Never drawn.
+const char* moonPhaseNameEn(MoonPhaseName p);
+
+// Where the next golden hour is, as numbers. GH_NOW carries how many minutes
+// are left in the window; GH_IN carries how long until the next one starts;
+// GH_NONE means the sun never reaches the elevation today, or the clock has not
+// synced -- both of which the scene draws as "--".
+enum GoldenKind : uint8_t { GH_NONE, GH_NOW, GH_IN };
+struct GoldenHour {
+  GoldenKind kind;
+  int hours;      // GH_IN only
+  int minutes;    // GH_NOW: left in the window.  GH_IN: minutes past the hour
+};
+GoldenHour goldenHourStatus();
 
 // UTC epoch of the sun reaching `elevDeg` on the given local date; morning=true
 // for the rising crossing, false for setting. 0 if it never reaches it (polar).

@@ -1,5 +1,6 @@
 #include "status_strip.h"
 #include "theme.h"
+#include "uitext.h"
 #include "time_manager.h"
 #include "scenes.h"
 #include "touch.h"
@@ -53,7 +54,7 @@ static void drawTime(const char* hhmm) {
   tft.fillRect(TIME_X, STATUS_Y + 6, 74, STATUS_H - 12, COL_STRIP_BG);
   tft.setTextColor(COL_TEXT, COL_STRIP_BG);
   tft.setTextDatum(ML_DATUM);
-  tft.setTextFont(4);
+  font_use(UI_FONT_M);
   tft.drawString(hhmm, TIME_X, STATUS_CY);
 }
 

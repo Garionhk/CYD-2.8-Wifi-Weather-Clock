@@ -19,6 +19,14 @@
 # custom blitter, and the fg/bg overload gives the compare-and-redraw partial
 # repaint this project uses everywhere.
 #
+# A 4-bpp alpha format was tried and withdrawn. It read better in principle --
+# no threshold, so no choice between fattened strokes and dropped interiors --
+# but it needed a hand-written blitter pushing RGB565 rows through pushImage,
+# and Chinese is the ONLY thing on the panel that would use it. Antialiasing
+# the Latin (tools/gen_vlw.py) costs nothing at draw time because TFT_eSPI does
+# it; antialiasing the Chinese meant owning a blit path of our own. Not worth it
+# for glyphs that are drawn from bitmaps anyway.
+#
 #   python3 tools/gen_zh_labels.py            # regenerate
 #   python3 tools/gen_zh_labels.py --preview  # ...and show them as ASCII art
 #
@@ -28,6 +36,7 @@
 
 import argparse
 import os
+import re
 import sys
 
 try:
@@ -80,6 +89,107 @@ LABELS = [
     ("MIN_AGO",       "分前",       16),
     ("NEXT_BUS",      "下一班車",   20),   # scene title / unconfigured screen
     ("LOADING",       "載入中",     24),   # first fetch has not landed yet
+    ("ADD_STOPS",     "在設定頁加入巴士站", 18),  # no slot configured
+
+    # --- clock: the date line ----------------------------------------------
+    # Drawn between numerals in UI_FONT_M, whose box is 26 px, so 22 px here.
+    # English gets "%a  %d %b %Y" from strftime; Chinese is built from parts,
+    # because the order is different and the month is a number, not a name --
+    # 2026年8月24日 星期一. Eleven small bitmaps instead of nineteen names.
+    ("YEAR",          "年",        22),
+    ("MONTH",         "月",        22),
+    ("DAY",           "日",        22),
+    ("WEEKDAY",       "星期",       22),
+    # 星期日 shares its last glyph with the 日 above. Kept separate anyway: one
+    # 250-byte duplicate is cheaper than a reader having to know they are the
+    # same character used two ways.
+    ("WD_0",          "日",        22),   # Sunday .. Saturday, tm_wday order
+    ("WD_1",          "一",        22),
+    ("WD_2",          "二",        22),
+    ("WD_3",          "三",        22),
+    ("WD_4",          "四",        22),
+    ("WD_5",          "五",        22),
+    ("WD_6",          "六",        22),
+
+    # --- clock: footer and status ------------------------------------------
+    ("SETUP_AT",      "設定:",       16),   # then a gap, then the IP in UI_FONT_S
+    ("WIFI_OFFLINE",  "WiFi 離線",   16),   # STHeiti has Latin, so this is one blob
+    ("SYNCING",       "校時中…",     22),
+
+    # --- weather ------------------------------------------------------------
+    ("WX_CLEAR",      "晴",         18),
+    ("WX_PARTLY",     "部分多雲",    18),
+    ("WX_CLOUD",      "多雲",        18),
+    ("WX_FOG",        "霧",         18),
+    ("WX_RAIN",       "雨",         18),
+    ("WX_SNOW",       "雪",         18),
+    ("WX_THUNDER",    "雷暴",        18),
+    ("WX_LOADING",    "讀取天氣中…",  22),
+    ("FEELS",         "體感",        16),
+    ("CLOUD_PCT",     "雲量",        16),
+    ("HUMIDITY",      "濕度",        16),
+    ("WIND",          "風速",        16),
+
+    # --- air quality --------------------------------------------------------
+    # 空氣質素, not 空氣質量: the former is what the HK EPD calls it, and this
+    # scene sits next to a Hong Kong bus timetable.
+    ("AQI_TITLE",     "空氣質素指數", 16),
+    ("AQI_LOADING",   "讀取空氣質素中…", 22),
+    ("AQI_GOOD",      "良好",        22),
+    ("AQI_MODERATE",  "中等",        22),
+    ("AQI_SENSITIVE", "敏感者不宜",   22),   # US AQI "Unhealthy (SG)"
+    ("AQI_UNHEALTHY", "不健康",      22),
+    ("AQI_VERY_BAD",  "極不健康",     22),
+    ("AQI_HAZARD",    "危害",        22),
+
+    # --- sun & moon ---------------------------------------------------------
+    ("SUNRISE",       "日出",        16),
+    ("SUNSET",        "日落",        16),
+    ("UV",            "紫外線",      16),
+    ("TOMORROW",      "明天",        16),
+    ("GOLDEN_HOUR",   "黃金時刻",     16),
+    ("LIT",           "亮度",        16),
+    ("NOW",           "現在",        22),   # golden hour: 現在 12分
+    ("HOURS",         "小時",        22),   # ...or 2小時05分後
+    ("MINUTES",       "分",         22),
+    ("AFTER",         "後",         22),
+    ("MOON_NEW",      "新月",        16),
+    ("MOON_WAX_CRE",  "蛾眉月",      16),
+    ("MOON_FIRST_Q",  "上弦月",      16),
+    ("MOON_WAX_GIB",  "盈凸月",      16),
+    ("MOON_FULL",     "滿月",        16),
+    ("MOON_WAN_GIB",  "虧凸月",      16),
+    ("MOON_LAST_Q",   "下弦月",      16),
+    ("MOON_WAN_CRE",  "殘月",        16),
+
+    # --- boot and setup portal ----------------------------------------------
+    # These run before the language setting has ever been read on a fresh
+    # device, so an unprovisioned board shows the English. They are baked all
+    # the same: every boot after the first one has a preference to honour.
+    ("BOOT_STORAGE",  "準備儲存空間…", 22),
+    ("BOOT_WIFI",     "連接WiFi中…",  22),
+    ("BOOT_SAVED",    "已儲存，重新啟動", 22),
+    ("SETUP_TITLE",   "設定",        22),
+    ("SETUP_JOIN",    "1. 加入此 WiFi 網絡", 16),
+    ("SETUP_AUTO",    "2. 設定頁面會自動開啟，", 16),
+    ("SETUP_OR",      "或前往",      16),
+
+    # --- touch calibration --------------------------------------------------
+    ("CAL_TL",        "左上",        22),
+    ("CAL_TR",        "右上",        22),
+    ("CAL_BR",        "右下",        22),
+    ("CAL_BL",        "左下",        22),
+    ("CAL_HOLD",      "用力按住",     16),
+    ("CAL_CONFIRM",   "點擊中央確認",  16),
+    ("CAL_TITLE",     "觸控設定",     22),
+    ("CAL_PRESS_EACH","逐一用力按下目標", 16),
+    ("CAL_SKIPPED",   "略過觸控設定",  22),
+    ("CAL_KEEPING",   "沿用先前校正",  16),
+    ("CAL_DONE",      "觸控校正完成",  22),
+    ("CAL_NOT_QUITE", "未夠準確",     22),
+    ("CAL_OFF_BY",    "像素，請再試", 16),   # after the pixel count
+    ("CAL_ROUGH",     "已儲存（粗略）", 22),
+    ("CAL_REDO",      "隨時長按4秒重做", 16),
 ]
 
 
@@ -128,6 +238,19 @@ def pack(img, box):
     return bytes(out), w, h
 
 
+def read_label_caps():
+    """LABEL_MAX_W / LABEL_MAX_H, from app/labels.h -- one source of truth."""
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    src = open(os.path.join(root, "app", "labels.h"), encoding="utf-8").read()
+    caps = {}
+    for name in ("LABEL_MAX_W", "LABEL_MAX_H"):
+        m = re.search(rf"static const int {name}\s*=\s*(\d+)", src)
+        if not m:
+            sys.exit(f"could not find {name} in app/labels.h")
+        caps[name] = int(m.group(1))
+    return caps["LABEL_MAX_W"], caps["LABEL_MAX_H"]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--preview", action="store_true",
@@ -168,6 +291,18 @@ def main():
                     "#" if data[2 + y * row_bytes + (x >> 3)] & (0x80 >> (x & 7)) else "."
                     for x in range(w))
                 print("  " + line)
+
+    # blit() refuses anything wider than LABEL_MAX_W and simply returns, so a
+    # label that outgrows the cap does not draw at all -- no warning, no serial
+    # line, just a gap where the words were. Read the real limits out of
+    # labels.h rather than restating them here, and fail the bake instead.
+    max_w, max_h = read_label_caps()
+    too_big = [(i, w, h) for i, _t, _p, _d, w, h in blobs if w > max_w or h > max_h]
+    if too_big:
+        for ident, w, h in too_big:
+            print(f"  ZH_{ident}: {w}x{h} exceeds {max_w}x{max_h}", file=sys.stderr)
+        sys.exit("labels above would be silently dropped by blit(); shorten the "
+                 "text, drop the px, or raise LABEL_MAX_* in app/labels.h")
 
     total = sum(len(b[3]) for b in blobs)
     banner = ("// Generated by tools/gen_zh_labels.py -- DO NOT EDIT BY HAND.\n"

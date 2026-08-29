@@ -1,4 +1,5 @@
 #include "bus.h"
+#include "uitext.h"
 #include "settings.h"
 #include "app_data.h"
 #include "labels.h"
@@ -139,14 +140,19 @@ static time_t parseIso8601(const char* s) {
 //
 // KMB says "Scheduled Bus" (原定班次); GMB says "Scheduled" (未開出). Two labels
 // rather than one, because each matches what that operator's own app shows.
+//
+// The result is a UiText id, so the row reads in whichever language the panel
+// is set to. The MATCHING still runs on the English field, and has to: the
+// JSON filter drops rmk_tc because the device could never draw it, and the
+// operators' English remark strings are the stable ones anyway.
 static uint8_t remarkLabel(const char* en, bool& scheduled) {
   scheduled = false;
   if (!en || !*en) return 0xFF;
-  if (strcmp(en, "Scheduled Bus") == 0) { scheduled = true; return ZH_TIMETABLE; }
-  if (strcmp(en, "Scheduled")     == 0) { scheduled = true; return ZH_SCHEDULED; }
-  if (strncmp(en, "Scheduled", 9) == 0) { scheduled = true; return ZH_TIMETABLE; }
-  if (strstr(en, "Last Bus"))  return ZH_LAST_BUS;
-  if (strstr(en, "Departed"))  return ZH_DEPARTED;
+  if (strcmp(en, "Scheduled Bus") == 0) { scheduled = true; return T_TIMETABLE; }
+  if (strcmp(en, "Scheduled")     == 0) { scheduled = true; return T_SCHEDULED; }
+  if (strncmp(en, "Scheduled", 9) == 0) { scheduled = true; return T_TIMETABLE; }
+  if (strstr(en, "Last Bus"))  return T_LAST_BUS;
+  if (strstr(en, "Departed"))  return T_DEPARTED;
   return 0xFF;
 }
 

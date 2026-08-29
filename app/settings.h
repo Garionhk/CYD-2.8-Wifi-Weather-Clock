@@ -18,6 +18,17 @@
 static const uint8_t UNITS_METRIC   = 0;   // C, km/h, hPa
 static const uint8_t UNITS_IMPERIAL = 1;   // F, mph, inHg
 
+// Panel language. English is the default because it is the only one an
+// unprovisioned device can show: the setup portal runs before this setting has
+// ever been read, so whatever it prints has to be readable by someone who has
+// not chosen yet.
+//
+// This selects the PANEL's language and the settings page's, nothing else. The
+// bus scene has always drawn Hong Kong stop names in Chinese regardless, since
+// those are the names written on the actual bus stop.
+static const uint8_t LANG_EN = 0;          // English
+static const uint8_t LANG_ZH = 1;          // Traditional Chinese
+
 // ---------------------------------------------------------------------------
 // Hong Kong bus / minibus stops (bus scene)
 // ---------------------------------------------------------------------------
@@ -117,6 +128,7 @@ struct Settings {
   float   longitude   =  -0.0015f;
   String  tz          = "UTC0";        // POSIX TZ string, not an IANA name
   uint8_t units       = UNITS_METRIC;
+  uint8_t lang        = LANG_EN;
   bool    provisioned = false;         // false until the user has saved once
   BusStop buses[BUS_SLOTS];            // all unset by default -- see valid()
 

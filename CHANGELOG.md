@@ -2,6 +2,85 @@
 
 ## Unreleased
 
+## v2.2.0 — English or 繁體中文, and text that stopped being jagged — 2026-08-24
+
+Adds a language setting that covers every surface the device has — all five
+screens, the status strip, the boot messages, the setup portal, the touch
+wizard and the settings page itself — and replaces the built-in bitmap fonts
+with antialiased ones everywhere Latin is drawn. The clock keeps its
+seven-segment face, now with smooth edges.
+
+Chinese stays 1-bit, deliberately. An antialiased version was built and
+withdrawn the same day: it would have made Chinese the only thing on the panel
+rendered through a blit path of our own, for glyphs that are bitmap art either
+way. `docs/decisions.md` has the reasoning, including the byte-order trap that
+made it visibly wrong on the panel.
+
+Flashing `cyd-clock-weather-v2.2.0-4mb.bin` at `0x0` is a **factory reset** —
+it erases stored settings and touch calibration along with everything else. To
+update an existing device and keep them, upload the application only with
+`./tools/flash.sh app`. See `flash.md`.
+
+### Added
+
+- **A language setting: English or 繁體中文.** A radio pair on the settings page,
+  stored in NVS beside Units; the device restarts into it like every other
+  setting. It covers the whole panel — all five scenes, the status strip, the
+  boot messages, the setup portal and the touch calibration wizard — and the
+  settings page itself, including the route picker.
+  - Bus stop names stay Chinese in both, because that is what is written on the
+    stop.
+  - An unprovisioned device shows English: the setup portal runs before there is
+    a stored preference to read, and the person seeing that screen has not
+    chosen one yet.
+  - The Chinese vocabulary grew from 18 baked strings to 93 (~14 KB). Anything
+    with a number in it — the date, the golden-hour countdown, "72% lit" — is
+    laid out part by part, because the two languages order the pieces
+    differently: `in 2h 05m` against `2小時05分後`.
+
+- **Every configured stop is baked on save**, not only the ones re-picked in
+  that page session. A stop added through "Manual entry" previously never got a
+  Chinese bitmap at all, and a slot whose bitmap had been lost could not be
+  recovered without drilling the whole route down again — a plain Save uploaded
+  nothing. It also refreshes a bitmap whose text was edited by hand.
+
+- **Anti-aliased text everywhere.**
+  - **Latin** now uses `.vlw` smooth fonts. `SMOOTH_FONT` had been enabled in
+    the `User_Setup` templates since the beginning and nothing had ever used it.
+    Four subsets are baked by `tools/gen_vlw.py`, which solves for the pixel
+    size that reproduces each built-in font's height rather than guessing, so
+    every existing layout constant still lands where it did.
+  - **The clock keeps its LCD look.** Font 8 was seven-segment, so the big
+    digits are baked from DSEG7 Classic Bold (SIL OFL, vendored in
+    `tools/fonts/`) rather than the proportional face used everywhere else.
+  - **Chinese is deliberately not antialiased.** It stays 1-bit, drawn by
+    `TFT_eSPI::drawBitmap` as it always has been. A 4-bpp alpha version was
+    tried and withdrawn: it would have made Chinese the only thing on the panel
+    rendered through a blit path of our own, for glyphs that are bitmap art
+    either way. See `docs/decisions.md`.
+
+### Changed
+
+- **The clock's digit sprite is allocated once at boot** instead of on every
+  scene entry. It was a 10 KB *contiguous* allocation several hundred times a
+  day, which is the fragmentation `labels.cpp` has always been written to avoid.
+- The degree sign is now a real glyph rather than two hand-drawn circles.
+- `goldenHourStatus()` returns numbers and `moonPhaseName()` returns a phase
+  enum, so `sun_moon.cpp` no longer contains any user-visible text.
+
+### Fixed
+
+- Removed `placeholder()`, dead since the last scene was implemented.
+
+### Upgrading
+
+Nothing to do. Baked stop-name bitmaps are unchanged from v2.1.0, and no setting
+is lost.
+
+If you flashed the short-lived build that stored them as 4-bpp alpha, the first
+boot converts them back byte-for-byte and removes `/l4`. Either way the bus
+scene never falls back to English on account of the upgrade.
+
 ## v2.1.0 — 下一班車, and a settings page for everything — 2026-08-10
 
 Adds a fifth scene showing the next Hong Kong bus or minibus, and moves the

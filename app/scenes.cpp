@@ -7,6 +7,7 @@
 #include "webconfig.h"
 #include "settings.h"
 #include "labels.h"
+#include "uitext.h"
 #include "bus.h"
 #include <WiFi.h>
 #include <time.h>
@@ -29,7 +30,13 @@ static bool  sprReady = false;
 static int   pDig[4]  = { -2, -2, -2, -2 };   // previous digit values
 static int   pColon   = -1;                   // -1 forces first draw
 static char  pDate[32] = "";
-static char  pNet[48]  = "";                  // settings-page address footer
+// Settings-page address footer. The "nothing drawn yet" sentinel is \x01 rather
+// than "": since netFooter started returning the bare address, an empty string
+// is a REAL state (offline, nothing to reach the page on), and using "" for
+// both meant the first compare said "unchanged" and the offline label never
+// painted. A control character is a value netFooter cannot produce.
+static const char NET_NEVER_DRAWN[] = "\x01";
+static char  pNet[48]  = "\x01";
 
 static void drawDigit(int idx, int val) {
   // Render one digit centred in its cell. Falls back to direct TFT drawing if
@@ -40,14 +47,13 @@ static void drawDigit(int idx, int val) {
     digitSpr.fillSprite(COL_BG);
     digitSpr.setTextColor(COL_TIME, COL_BG);
     digitSpr.setTextDatum(MC_DATUM);
-    digitSpr.setTextFont(8);
     digitSpr.drawString(s, DIGIT_W / 2, DIGIT_H / 2);
     digitSpr.pushSprite(x, DIGIT_TOP_Y);
   } else {
     tft.fillRect(x, DIGIT_TOP_Y, DIGIT_W, DIGIT_H, COL_BG);
     tft.setTextColor(COL_TIME, COL_BG);
     tft.setTextDatum(MC_DATUM);
-    tft.setTextFont(8);
+    font_use(UI_FONT_XL);
     tft.drawString(s, x + DIGIT_W / 2, DIGIT_TOP_Y + DIGIT_H / 2);
   }
 }
@@ -61,31 +67,53 @@ static void drawColon(bool on) {
 // Where to reach the settings page. Printed on the clock because there is
 // otherwise no way to find it without a serial monitor or the router's client
 // list -- and in AP mode, no way to know the network name to join either.
+// Returns just the ADDRESS now, not the whole sentence: the "setup:" prefix is
+// a word that translates and the address is not, so the caller assembles them.
+// An empty string means there is nothing to reach the settings page on, which
+// the caller renders as the offline label.
 static void netFooter(char* out, size_t n) {
   if (webconfig_isAP())
-    snprintf(out, n, "setup: %s / %s", webconfig_apSsid().c_str(), webconfig_ip().c_str());
+    snprintf(out, n, "%s / %s", webconfig_apSsid().c_str(), webconfig_ip().c_str());
   else if (WiFi.status() == WL_CONNECTED)
-    snprintf(out, n, "setup: %s", webconfig_ip().c_str());
+    snprintf(out, n, "%s", webconfig_ip().c_str());
   else
-    snprintf(out, n, "wifi offline");
+    out[0] = '\0';
+}
+
+// Allocate the digit sprite, once, for the life of the device.
+//
+// It used to be created in clockEnter and freed in clockExit, which meant a
+// 10 KB CONTIGUOUS allocation every time the rotation came round -- perhaps
+// four hundred times a day, each one competing with whatever the heap had
+// fragmented into since. labels.cpp is written entirely around not doing that
+// to this sprite; the sprite was doing it to itself.
+//
+// Now that font_use() swaps smooth-font metrics in and out on the same heap,
+// holding the buffer is not merely tidier, it is what makes the swapping safe:
+// nothing else in this firmware wants a block anywhere near this size, so if it
+// is claimed at boot it can never be lost to fragmentation later.
+static void spriteBegin() {
+  if (sprReady) return;
+  sprReady = (digitSpr.createSprite(DIGIT_W, DIGIT_H) != nullptr);
+  if (!sprReady) {
+    Serial.println("WARN: digit sprite alloc failed; drawing direct");
+    return;
+  }
+  // The sprite carries its own glyph metrics, so it needs its own copy of the
+  // font -- font_use() only speaks for the panel. Loaded here and never
+  // unloaded: doing it inside drawDigit would put a malloc on the one path that
+  // runs every second.
+  digitSpr.loadFont(UI_FONTS[UI_FONT_XL]);
 }
 
 static void clockEnter() {
   tft.fillRect(0, 0, SCREEN_W, CONTENT_H, COL_BG);
 
-  // Free any existing buffer first. onEnter can be re-entered without a
-  // matching onExit -- the calibration wizard restarts the scene machine --
-  // and createSprite over a live sprite would leak its 10 KB every time.
-  if (sprReady) { digitSpr.deleteSprite(); sprReady = false; }
-
-  sprReady = (digitSpr.createSprite(DIGIT_W, DIGIT_H) != nullptr);
-  if (!sprReady) Serial.println("WARN: digit sprite alloc failed; drawing direct");
-
   // Force a full redraw on the first tick.
   for (int i = 0; i < 4; i++) pDig[i] = -2;
   pColon = -1;
   pDate[0] = '\0';
-  pNet[0]  = '\0';
+  strncpy(pNet, NET_NEVER_DRAWN, sizeof(pNet));
 }
 
 static void clockTick() {
@@ -107,15 +135,42 @@ static void clockTick() {
   int colon = valid ? (t.tm_sec % 2 == 0 ? 1 : 0) : 1;
   if (colon != pColon) { drawColon(colon == 1); pColon = colon; }
 
-  char buf[32];
-  if (valid) strftime(buf, sizeof(buf), "%a  %d %b %Y", &t);
-  else       strncpy(buf, "syncing time...", sizeof(buf));
+  // The date line. English is one strftime; Chinese is built from parts,
+  // because the order is inverted and the month is a number rather than a name
+  // -- 2026年8月24日 星期一 against Mon  24 Aug 2026. pDate still holds a
+  // string either way: it is only ever compared, never drawn, and formatting
+  // the Chinese into it is what keeps the compare-and-redraw honest about a
+  // date that has changed.
+  // Same size as pDate: the strncpy below caps at sizeof(pDate), so a longer
+  // buf could hand it an unterminated copy.
+  char buf[sizeof(pDate)];
+  if (!valid)         strncpy(buf, "syncing", sizeof(buf));
+  else if (ui_zh())   snprintf(buf, sizeof(buf), "%d/%d/%d/%d",
+                               t.tm_year + 1900, t.tm_mon + 1, t.tm_mday, t.tm_wday);
+  else                strftime(buf, sizeof(buf), "%a  %d %b %Y", &t);
+
   if (strcmp(buf, pDate) != 0) {
     tft.fillRect(0, DATE_Y - 16, SCREEN_W, 32, COL_BG);
-    tft.setTextColor(COL_DATE, COL_BG);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextFont(4);
-    tft.drawString(buf, SCREEN_W / 2, DATE_Y);
+    if (!valid) {
+      ui_draw(T_SYNCING, SCREEN_W / 2, DATE_Y, LBL_CENTRE, COL_DATE, COL_BG);
+    } else if (ui_zh()) {
+      char y[6], m[4], d[4];
+      snprintf(y, sizeof(y), "%d", t.tm_year + 1900);
+      snprintf(m, sizeof(m), "%d", t.tm_mon + 1);
+      snprintf(d, sizeof(d), "%d", t.tm_mday);
+      UiRun run;
+      run.text(y, UI_FONT_M).label(T_YEAR)
+         .text(m, UI_FONT_M).label(T_MONTH)
+         .text(d, UI_FONT_M).label(T_DAY)
+         .gap(10)
+         .label(T_WEEKDAY).label((UiText)(T_WD_0 + t.tm_wday));
+      run.draw(SCREEN_W / 2, DATE_Y, LBL_CENTRE, COL_DATE, COL_BG);
+    } else {
+      tft.setTextColor(COL_DATE, COL_BG);
+      tft.setTextDatum(MC_DATUM);
+      font_use(UI_FONT_M);
+      tft.drawString(buf, SCREEN_W / 2, DATE_Y);
+    }
     strncpy(pDate, buf, sizeof(pDate));
   }
 
@@ -126,31 +181,21 @@ static void clockTick() {
   netFooter(net, sizeof(net));
   if (strcmp(net, pNet) != 0) {
     tft.fillRect(0, NET_Y - 8, SCREEN_W, 16, COL_BG);
-    tft.setTextColor(COL_DIM, COL_BG);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextFont(2);
-    tft.drawString(net, SCREEN_W / 2, NET_Y);
+    if (net[0] == '\0') {
+      // Offline: the whole line is one word in both languages.
+      ui_draw(T_WIFI_OFFLINE, SCREEN_W / 2, NET_Y, LBL_CENTRE, COL_DIM, COL_BG);
+    } else {
+      // "setup: <addr>" -- the address is Latin in both languages, so only the
+      // prefix comes out of the table.
+      UiRun run;
+      run.label(T_SETUP_AT).gap(4).text(net, UI_FONT_S);
+      run.draw(SCREEN_W / 2, NET_Y, LBL_CENTRE, COL_DIM, COL_BG);
+    }
     strncpy(pNet, net, sizeof(pNet));
   }
 }
 
-static void clockExit() {
-  if (sprReady) { digitSpr.deleteSprite(); sprReady = false; }
-}
-
-// ===========================================================================
-// Scenes 2-4 -- placeholders (populated in later build steps)
-// ===========================================================================
-static void placeholder(const char* label) {
-  tft.fillRect(0, 0, SCREEN_W, CONTENT_H, COL_BG);
-  tft.setTextColor(COL_ACCENT, COL_BG);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextFont(4);
-  tft.drawString(label, SCREEN_W / 2, CONTENT_H / 2 - 12);
-  tft.setTextColor(COL_DIM, COL_BG);
-  tft.setTextFont(2);
-  tft.drawString("coming soon", SCREEN_W / 2, CONTENT_H / 2 + 22);
-}
+// No clockExit: the digit sprite outlives the scene now. See spriteBegin.
 
 // ===========================================================================
 // Scene 2 -- Weather (plan §7)
@@ -174,17 +219,17 @@ static WxCat wxCategory(int code) {
   return WX_CLOUD;
 }
 
-static const char* wxLabel(int code) {
+static UiText wxLabel(int code) {
   switch (wxCategory(code)) {
-    case WX_CLEAR:   return "Clear";
-    case WX_PARTLY:  return "Partly Cloudy";
-    case WX_CLOUD:   return "Cloudy";
-    case WX_FOG:     return "Fog";
-    case WX_RAIN:    return "Rain";
-    case WX_SNOW:    return "Snow";
-    case WX_THUNDER: return "Thunderstorm";
+    case WX_CLEAR:   return T_WX_CLEAR;
+    case WX_PARTLY:  return T_WX_PARTLY;
+    case WX_CLOUD:   return T_WX_CLOUD;
+    case WX_FOG:     return T_WX_FOG;
+    case WX_RAIN:    return T_WX_RAIN;
+    case WX_SNOW:    return T_WX_SNOW;
+    case WX_THUNDER: return T_WX_THUNDER;
   }
-  return "";
+  return T_WX_CLOUD;
 }
 
 static void iconSun(int cx, int cy, int r, uint16_t col) {
@@ -243,41 +288,63 @@ static void drawWeatherIcon(int cx, int cy, int code) {
   }
 }
 
-// Draw "<value>°<unit>" left-anchored at (x, yMid) in `font`. The degree ring
-// is drawn by hand -- the built-in fonts don't include the ° glyph.
-static int drawDegVal(int x, int yMid, uint8_t font, int val, const char* unit, uint16_t col) {
-  tft.setTextFont(font);
+// Draw "<value>°<unit>" left-anchored at (x, yMid) in `font`; returns the x it
+// finished at, so callers can chain a second value after the first.
+//
+// The ring used to be a pair of drawCircles positioned by hand, because fonts 6
+// and 8 are digits-only and there was no ° to draw. The baked subsets carry one
+// (tools/gen_vlw.py names it explicitly), so it is now simply a character --
+// scaled and positioned by the same metrics as the number in front of it,
+// instead of by two constants that had to be re-guessed for every size.
+static int drawDegVal(int x, int yMid, UiFont font, int val, const char* unit, uint16_t col) {
+  font_use(font);
   tft.setTextDatum(ML_DATUM);
   tft.setTextColor(col, COL_BG);
-  String s = String(val);
+  const String s = String(val) + "°";
   tft.drawString(s, x, yMid);
-  int nx = x + tft.textWidth(s);
-  int fh = tft.fontHeight();
-  int r  = (font >= 6) ? 4 : 2;
-  int ringX = nx + r + 3;
-  int ringY = yMid - fh / 2 + r + 2;
-  tft.drawCircle(ringX, ringY, r, col);
-  if (r > 2) tft.drawCircle(ringX, ringY, r - 1, col);
-  int ux = ringX + r + 3;
-  tft.setTextFont(2);   // unit needs a lettered font (Font 6/8 are digits-only)
+  const int nx = x + tft.textWidth(s);
+  if (!unit || !*unit) return nx;
+
+  // The unit stays small whatever size the number is: "24°C" with a full-height
+  // C reads as a measurement in a table, not a temperature on a wall.
+  font_use(UI_FONT_S);
+  const int ux = nx + 3;
   tft.drawString(unit, ux, yMid);
   return ux + tft.textWidth(unit);
 }
 
-// 9x9 up/down triangle, vertically centred on yMid -- the built-in fonts have
-// no arrow glyphs, same reason drawDegVal hand-draws the degree ring.
+// 9x9 up/down marker for the day's high and low, vertically centred on yMid.
+//
+// Still hand-drawn, and now on purpose rather than for want of a glyph:
+// Helvetica Neue has no U+2191 or U+2193 at all, so asking for them baked a
+// .notdef box into the font (tools/gen_vlw.py grew a guard over that). Arial
+// Unicode does carry them, but a text-face arrow at 9 px is a thin stem and a
+// small head, and this wants to read as a direction from across a room.
 static void triMark(int x, int yMid, bool up, uint16_t col) {
   if (up) tft.fillTriangle(x, yMid + 4, x + 8, yMid + 4, x + 4, yMid - 4, col);
   else    tft.fillTriangle(x, yMid - 4, x + 8, yMid - 4, x + 4, yMid + 4, col);
 }
 
-static void weatherStat(int cx, const char* big, const char* label) {
+// The value, then its caption underneath. Two forms: most captions are words
+// that translate, but PM2.5 and the unit abbreviations (km/h, hPa) are the same
+// string in both languages and have no entry in the table.
+static void weatherStatValue(int cx, const char* big) {
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(COL_TEXT, COL_BG);
-  tft.setTextFont(4);
+  font_use(UI_FONT_M);
   tft.drawString(big, cx, 150);
+}
+
+static void weatherStat(int cx, const char* big, UiText label) {
+  weatherStatValue(cx, big);
+  ui_draw(label, cx, 176, LBL_CENTRE, COL_DIM, COL_BG);
+}
+
+static void weatherStat(int cx, const char* big, const char* label) {
+  weatherStatValue(cx, big);
+  tft.setTextDatum(MC_DATUM);
   tft.setTextColor(COL_DIM, COL_BG);
-  tft.setTextFont(2);
+  font_use(UI_FONT_S);
   tft.drawString(label, cx, 176);
 }
 
@@ -287,28 +354,19 @@ static void weatherEnter() {
   tft.fillRect(0, 0, SCREEN_W, CONTENT_H, COL_BG);
 
   if (!g_data.weatherValid) {
-    tft.setTextColor(COL_DIM, COL_BG);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextFont(4);
-    tft.drawString("fetching weather...", SCREEN_W / 2, CONTENT_H / 2);
+    ui_draw(T_WX_LOADING, SCREEN_W / 2, CONTENT_H / 2, LBL_CENTRE, COL_DIM, COL_BG);
     wxShownAt = 0;
     return;
   }
 
   // Left: icon + condition label
   drawWeatherIcon(70, 56, g_data.weatherCode);
-  tft.setTextColor(COL_TEXT, COL_BG);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextFont(2);
-  tft.drawString(wxLabel(g_data.weatherCode), 70, 110);
+  ui_draw(wxLabel(g_data.weatherCode), 70, 110, LBL_CENTRE, COL_TEXT, COL_BG);
 
   // Right: big temperature, feels-like beneath
-  drawDegVal(168, 52, 6, (int)lroundf(dispTemp(g_data.tempC)), tempUnit(), COL_TEXT);
-  tft.setTextColor(COL_DATE, COL_BG);
-  tft.setTextFont(2);
-  tft.setTextDatum(ML_DATUM);
-  tft.drawString("Feels", 168, 96);
-  drawDegVal(168 + tft.textWidth("Feels") + 6, 96, 2,
+  drawDegVal(168, 52, UI_FONT_L, (int)lroundf(dispTemp(g_data.tempC)), tempUnit(), COL_TEXT);
+  ui_draw(T_FEELS, 168, 96, LBL_LEFT, COL_DATE, COL_BG);
+  drawDegVal(168 + ui_width(T_FEELS) + 6, 96, UI_FONT_S,
              (int)lroundf(dispTemp(g_data.feelsLikeC)), tempUnit(), COL_DATE);
 
   // Today's range beneath, once the daily forecast has landed. No unit letter --
@@ -316,9 +374,9 @@ static void weatherEnter() {
   if (g_data.dailyValid) {
     int x = 168;
     triMark(x, 120, true, C_HI);
-    x = drawDegVal(x + 12, 120, 4, (int)lroundf(dispTemp(g_data.tempMaxC)), "", C_HI);
+    x = drawDegVal(x + 12, 120, UI_FONT_M, (int)lroundf(dispTemp(g_data.tempMaxC)), "", C_HI);
     triMark(x + 14, 120, false, C_LO);
-    drawDegVal(x + 26, 120, 4, (int)lroundf(dispTemp(g_data.tempMinC)), "", C_LO);
+    drawDegVal(x + 26, 120, UI_FONT_M, (int)lroundf(dispTemp(g_data.tempMinC)), "", C_LO);
   }
 
   // Bottom: cloud, humidity, wind
@@ -326,9 +384,9 @@ static void weatherEnter() {
   snprintf(c, sizeof(c), "%d%%", g_data.cloudCoverPct);
   snprintf(h, sizeof(h), "%d%%", g_data.humidityPct);
   snprintf(w, sizeof(w), "%d %s", (int)lroundf(dispWind(g_data.windKph)), windUnit());
-  weatherStat(55,  c, "CLOUD");
-  weatherStat(160, h, "HUMIDITY");
-  weatherStat(265, w, "WIND");
+  weatherStat(55,  c, T_CLOUD_PCT);
+  weatherStat(160, h, T_HUMIDITY);
+  weatherStat(265, w, T_WIND);
 
   wxShownAt = g_data.weatherUpdatedAt;
 }
@@ -344,15 +402,15 @@ static void weatherTick() {
 // AQI headline, colour-coded to the US AQI bands, with the band name in words.
 // Secondary: PM2.5, humidity, wind, pressure with a trend arrow.
 
-struct AqiBand { uint16_t color; const char* name; };
+struct AqiBand { uint16_t color; UiText name; };
 
 static AqiBand aqiBand(int aqi) {
-  if (aqi <= 50)  return { 0x07E0, "Good" };            // green
-  if (aqi <= 100) return { 0xFFE0, "Moderate" };        // yellow
-  if (aqi <= 150) return { 0xFD20, "Unhealthy (SG)" };  // orange
-  if (aqi <= 200) return { 0xF800, "Unhealthy" };       // red
-  if (aqi <= 300) return { 0x8010, "Very Unhealthy" };  // purple
-  return            { 0x7800, "Hazardous" };            // maroon
+  if (aqi <= 50)  return { 0x07E0, T_AQI_GOOD       };   // green
+  if (aqi <= 100) return { 0xFFE0, T_AQI_MODERATE   };   // yellow
+  if (aqi <= 150) return { 0xFD20, T_AQI_SENSITIVE  };   // orange
+  if (aqi <= 200) return { 0xF800, T_AQI_UNHEALTHY  };   // red
+  if (aqi <= 300) return { 0x8010, T_AQI_VERY_BAD   };   // purple
+  return            { 0x7800, T_AQI_HAZARD    };         // maroon
 }
 
 // Pressure trend triangle: rising / falling / steady.
@@ -366,12 +424,12 @@ static void drawTrend(int x, int y, float trend) {
 static void pressureStat(int cx, const char* val, const char* unit, float trend) {
   tft.setTextDatum(MC_DATUM);
   tft.setTextColor(COL_TEXT, COL_BG);
-  tft.setTextFont(4);
+  font_use(UI_FONT_M);
   tft.drawString(val, cx, 150);
   int w = tft.textWidth(val);
   drawTrend(cx + w / 2 + 6, 150, trend);
   tft.setTextColor(COL_DIM, COL_BG);
-  tft.setTextFont(2);
+  font_use(UI_FONT_S);
   tft.drawString(unit, cx, 176);
 }
 
@@ -381,28 +439,21 @@ static void airQualEnter() {
   tft.fillRect(0, 0, SCREEN_W, CONTENT_H, COL_BG);
 
   if (!g_data.aqiValid) {
-    tft.setTextColor(COL_DIM, COL_BG);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextFont(4);
-    tft.drawString("fetching air quality...", SCREEN_W / 2, CONTENT_H / 2);
+    ui_draw(T_AQI_LOADING, SCREEN_W / 2, CONTENT_H / 2, LBL_CENTRE, COL_DIM, COL_BG);
     aqShownAt = 0;
     return;
   }
 
   AqiBand band = aqiBand(g_data.aqi);
 
-  tft.setTextColor(COL_DIM, COL_BG);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextFont(2);
-  tft.drawString("AIR QUALITY INDEX", SCREEN_W / 2, 16);
+  ui_draw(T_AQI_TITLE, SCREEN_W / 2, 16, LBL_CENTRE, COL_DIM, COL_BG);
 
   tft.setTextColor(band.color, COL_BG);
-  tft.setTextFont(8);
+  tft.setTextDatum(MC_DATUM);
+  font_use(UI_FONT_XL);
   tft.drawString(String(g_data.aqi), SCREEN_W / 2, 62);
 
-  tft.setTextColor(band.color, COL_BG);
-  tft.setTextFont(4);
-  tft.drawString(band.name, SCREEN_W / 2, 112);
+  ui_draw(band.name, SCREEN_W / 2, 112, LBL_CENTRE, band.color, COL_BG);
 
   // Secondary row: PM2.5, humidity, wind, pressure(+trend). Short labels so
   // four columns fit; wind/pressure use the configured units.
@@ -413,7 +464,7 @@ static void airQualEnter() {
   snprintf(pres, sizeof(pres), "%d",   (int)lroundf(dispPress(g_data.pressureHpa)));
 
   weatherStat(42,  pm,   "PM2.5");
-  weatherStat(116, hum,  "HUM");
+  weatherStat(116, hum,  T_HUMIDITY);
   weatherStat(190, wind, windUnit());
   pressureStat(268, pres, pressUnit(), g_data.pressureTrend);
 
@@ -492,19 +543,60 @@ static void drawMoon(int cx, int cy, int R, float phase) {
 // than Font 2 because there is now room for it, and "how long until the light
 // is good" is the number you actually came to read -- 124 px at its longest
 // ("in 23h 59m"), which fits the 150 px column with margin either side.
+// The eight phases, in MoonPhaseName order. sun_moon.cpp deliberately does not
+// know these ids exist -- it returns which phase, and this is where a phase
+// acquires a name in a language.
+static UiText moonPhaseText(MoonPhaseName p) {
+  static const UiText NAMES[MOON_PHASE_COUNT] = {
+    T_MOON_NEW, T_MOON_WAX_CRE, T_MOON_FIRST_Q, T_MOON_WAX_GIB,
+    T_MOON_FULL, T_MOON_WAN_GIB, T_MOON_LAST_Q, T_MOON_WAN_CRE,
+  };
+  return (p < MOON_PHASE_COUNT) ? NAMES[p] : T_MOON_NEW;
+}
+
 static const int SM_GX  = 243;   // centre line of the golden-hour block
 static const int SM_GLY = 138;   // "Golden hour" label
 static const int SM_GY  = 166;   // the value
 static int smShownMin = -1;
 
+// Golden hour, in whichever language. The two read in opposite directions --
+// "in 2h 05m" leads with the preposition, 2小時05分後 trails with it -- so this
+// is a UiRun rather than a format string with swapped arguments.
 static void drawGolden() {
-  char g[24];
-  goldenHourStatus(g, sizeof(g));
+  const GoldenHour gh = goldenHourStatus();
   tft.fillRect(SM_GX - 75, SM_GY - 15, 152, 30, COL_BG);
-  tft.setTextColor(C_SUN, COL_BG);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextFont(4);
-  tft.drawString(g, SM_GX, SM_GY);
+
+  if (gh.kind == GH_NONE) {
+    font_use(UI_FONT_M);
+    tft.setTextColor(C_SUN, COL_BG);
+    tft.setTextDatum(MC_DATUM);
+    tft.drawString("--", SM_GX, SM_GY);
+    return;
+  }
+
+  char a[8], b[8];
+  UiRun run;
+  if (gh.kind == GH_NOW) {
+    snprintf(a, sizeof(a), "%d", gh.minutes);
+    if (ui_zh()) {                            // 現在 12分
+      run.label(T_NOW).gap(5).text(a, UI_FONT_M).label(T_MINUTES);
+    } else {                                  // now (12m)
+      snprintf(b, sizeof(b), "(%dm)", gh.minutes);
+      run.label(T_NOW).gap(5).text(b, UI_FONT_M);
+    }
+  } else {
+    snprintf(a, sizeof(a), "%d", gh.hours);
+    snprintf(b, sizeof(b), "%02d", gh.minutes);
+    if (ui_zh()) {                            // 2小時05分後
+      run.text(a, UI_FONT_M).label(T_HOURS)
+         .text(b, UI_FONT_M).label(T_MINUTES).label(T_AFTER);
+    } else {                                  // in 2h 05m
+      run.label(T_AFTER).gap(5)
+         .text(a, UI_FONT_M).label(T_HOURS).gap(5)
+         .text(b, UI_FONT_M).label(T_MINUTES);
+    }
+  }
+  run.draw(SM_GX, SM_GY, LBL_CENTRE, C_SUN, COL_BG);
 }
 
 static void sunMoonEnter() {
@@ -524,34 +616,31 @@ static void sunMoonEnter() {
 
   // Left-bottom: moon
   drawMoon(40, 152, 22, g_data.moonPhase);
-  tft.setTextColor(COL_TEXT, COL_BG);
-  tft.setTextDatum(ML_DATUM);
-  tft.setTextFont(2);
-  tft.drawString(moonPhaseName(g_data.moonPhase), 72, 144);
-  char mi[16];
-  snprintf(mi, sizeof(mi), "%.0f%% lit", g_data.moonIlluminationPct);
-  tft.setTextColor(COL_DIM, COL_BG);
-  tft.drawString(mi, 72, 164);
+  ui_draw(moonPhaseText(moonPhaseName(g_data.moonPhase)), 72, 144,
+          LBL_LEFT, COL_TEXT, COL_BG);
+
+  // "72% lit" / 亮度 72% -- the caption changes sides between the languages.
+  char mi[12];
+  snprintf(mi, sizeof(mi), "%.0f%%", g_data.moonIlluminationPct);
+  UiRun lit;
+  if (ui_zh()) lit.label(T_LIT).gap(5).text(mi, UI_FONT_S);
+  else         lit.text(mi, UI_FONT_S).gap(4).label(T_LIT);
+  lit.draw(72, 164, LBL_LEFT, COL_DIM, COL_BG);
 
   // Right column: TOMORROW banner, rise/set, UV
-  if (g_data.showingNextDay) {
-    tft.setTextColor(0xFD20, COL_BG);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextFont(2);
-    tft.drawString("TOMORROW", 240, 12);
-  }
+  if (g_data.showingNextDay)
+    ui_draw(T_TOMORROW, 240, 12, LBL_CENTRE, 0xFD20, COL_BG);
 
   char rs[8], ss[8];
   if (rise) strftime(rs, sizeof(rs), "%H:%M", localtime(&rise)); else strncpy(rs, "--:--", sizeof(rs));
   if (set)  strftime(ss, sizeof(ss), "%H:%M", localtime(&set));  else strncpy(ss, "--:--", sizeof(ss));
 
   const int rx = 170;
+  ui_draw(T_SUNRISE, rx, 34, LBL_LEFT, COL_DATE, COL_BG);
+  ui_draw(T_SUNSET,  rx, 64, LBL_LEFT, COL_DATE, COL_BG);
+  ui_draw(T_UV,      rx, 94, LBL_LEFT, COL_DATE, COL_BG);
   tft.setTextDatum(ML_DATUM);
-  tft.setTextColor(COL_DATE, COL_BG); tft.setTextFont(2);
-  tft.drawString("Sunrise", rx, 34);
-  tft.drawString("Sunset",  rx, 64);
-  tft.drawString("UV",      rx, 94);
-  tft.setTextColor(COL_TEXT, COL_BG); tft.setTextFont(4);
+  tft.setTextColor(COL_TEXT, COL_BG); font_use(UI_FONT_M);
   tft.drawString(rs, rx + 62, 34);
   tft.drawString(ss, rx + 62, 64);
   if (g_data.uvValid) {
@@ -563,10 +652,7 @@ static void sunMoonEnter() {
   }
 
   // Golden-hour label + value, centred beneath the rise/set/UV column.
-  tft.setTextColor(COL_DATE, COL_BG);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextFont(2);
-  tft.drawString("Golden hour", SM_GX, SM_GLY);
+  ui_draw(T_GOLDEN_HOUR, SM_GX, SM_GLY, LBL_CENTRE, COL_DATE, COL_BG);
   struct tm t; getLocalTime(&t, 10); smShownMin = t.tm_min;
   drawGolden();
 }
@@ -734,7 +820,7 @@ static void drawBusTrack(int row, int slot, int mins) {
     tft.setTextColor(far ? COL_BG : opTextColour(b.op), col);
   }
   tft.setTextDatum(MC_DATUM);
-  tft.setTextFont(4);
+  font_use(UI_FONT_M);
   tft.drawString(b.route, x + BUS_BADGE_W / 2, by + BUS_BADGE_H / 2);
 }
 
@@ -749,29 +835,29 @@ static void drawBusMinutes(int row, int slot, int mins) {
   const int myCy = y0 + BUS_TRACK_DY;
 
   switch (mins) {
-    case BM_NOCLOCK: label_draw(ZH_NO_CLOCK,   BUS_NUM_R, myCy, LBL_RIGHT, COL_DIM,          COL_BG); return;
-    case BM_NONE:    label_draw(ZH_NO_SERVICE, BUS_NUM_R, myCy, LBL_RIGHT, COL_DIM,          COL_BG); return;
-    case BM_CHECK:   label_draw(ZH_CHECK_STOP, BUS_NUM_R, myCy, LBL_RIGHT, COL_FRESH_OLD,    COL_BG); return;
+    case BM_NOCLOCK: ui_draw(T_NO_CLOCK,   BUS_NUM_R, myCy, LBL_RIGHT, COL_DIM,          COL_BG); return;
+    case BM_NONE:    ui_draw(T_NO_SERVICE, BUS_NUM_R, myCy, LBL_RIGHT, COL_DIM,          COL_BG); return;
+    case BM_CHECK:   ui_draw(T_CHECK_STOP, BUS_NUM_R, myCy, LBL_RIGHT, COL_FRESH_OLD,    COL_BG); return;
     case BM_LOADING:
       tft.setTextColor(COL_DIM, COL_BG);
       tft.setTextDatum(MR_DATUM);
-      tft.setTextFont(6);
+      font_use(UI_FONT_L);
       tft.drawString("--", BUS_NUM_R, y0 + BUS_MIN_DY);
       return;
     default: break;
   }
 
   if (mins <= 1) {
-    label_draw(ZH_ARRIVING, BUS_NUM_R, myCy, LBL_RIGHT, COL_ACCENT, COL_BG);
+    ui_draw(T_ARRIVING, BUS_NUM_R, myCy, LBL_RIGHT, COL_ACCENT, COL_BG);
     return;
   }
 
   const uint16_t c = (mins <= 3) ? COL_FRESH_WARN : COL_TEXT;
   tft.setTextColor(c, COL_BG);
   tft.setTextDatum(MR_DATUM);
-  tft.setTextFont(6);
+  font_use(UI_FONT_L);
   tft.drawString(String(mins), BUS_NUM_R, y0 + BUS_MIN_DY);
-  label_draw(ZH_FEN_ZHONG, BUS_NUM_R, y0 + BUS_UNIT_DY, LBL_RIGHT, COL_DIM, COL_BG);
+  ui_draw(T_MIN_UNIT, BUS_NUM_R, y0 + BUS_UNIT_DY, LBL_RIGHT, COL_DIM, COL_BG);
 }
 
 // Remark, right-aligned against the far end of the track. Known remarks get
@@ -799,11 +885,11 @@ static void drawBusRemark(int row, int slot) {
   if (sched) return;
 
   if (rmk != 0xFF) {
-    label_draw((ZhLabel)rmk, BUS_TRACK_X1, y0 + BUS_DEST_DY, LBL_RIGHT, COL_DIM, COL_BG);
+    ui_draw((UiText)rmk, BUS_TRACK_X1, y0 + BUS_DEST_DY, LBL_RIGHT, COL_DIM, COL_BG);
   } else if (rmkEn && *rmkEn) {
     tft.setTextColor(COL_DIM, COL_BG);
     tft.setTextDatum(MR_DATUM);
-    tft.setTextFont(2);
+    font_use(UI_FONT_S);
     tft.drawString(rmkEn, BUS_TRACK_X1, y0 + BUS_DEST_DY);
   }
 }
@@ -822,19 +908,19 @@ static void drawBusRowStatic(int row, int slot) {
                       LBL_LEFT, COL_TEXT, COL_BG)) {
     tft.setTextColor(COL_TEXT, COL_BG);
     tft.setTextDatum(ML_DATUM);
-    tft.setTextFont(4);
+    font_use(UI_FONT_M);
     tft.drawString(b.stopEn.length() ? b.stopEn : b.stopId, BUS_TRACK_X0, y0 + BUS_NAME_DY);
   }
 
   // Destination, prefixed 往 ("to").
   int x = BUS_TRACK_X0;
   if (b.destTc.length() || b.destEn.length()) {
-    label_draw(ZH_TO, x, y0 + BUS_DEST_DY, LBL_LEFT, COL_DIM, COL_BG);
-    x += label_width(ZH_TO) + 5;
+    ui_draw(T_TO, x, y0 + BUS_DEST_DY, LBL_LEFT, COL_DIM, COL_BG);
+    x += ui_width(T_TO) + 5;
     if (!label_drawUser(slot, UL_DEST, x, y0 + BUS_DEST_DY, LBL_LEFT, COL_DATE, COL_BG)) {
       tft.setTextColor(COL_DATE, COL_BG);
       tft.setTextDatum(ML_DATUM);
-      tft.setTextFont(2);
+      font_use(UI_FONT_S);
       tft.drawString(b.destEn, x, y0 + BUS_DEST_DY);
     }
   }
@@ -872,8 +958,8 @@ static void drawBusAge(bool force) {
 
   if (force || useMin != busShownAgeMin) {
     tft.fillRect(BUS_AGE_NUM_L - 42, 0, SCREEN_W - BUS_AGE_NUM_L + 42, 18, COL_BG);
-    label_draw(ZH_UPDATED, BUS_AGE_NUM_L - 5, BUS_HDR_Y, LBL_RIGHT, COL_DIM, COL_BG);
-    label_draw(useMin ? ZH_MIN_AGO : ZH_SEC_AGO, BUS_AGE_UNIT_R, BUS_HDR_Y,
+    ui_draw(T_UPDATED, BUS_AGE_NUM_L - 5, BUS_HDR_Y, LBL_RIGHT, COL_DIM, COL_BG);
+    ui_draw(useMin ? T_MIN_AGO : T_SEC_AGO, BUS_AGE_UNIT_R, BUS_HDR_Y,
                LBL_RIGHT, COL_DIM, COL_BG);
   }
   busShownAgeMin = useMin;
@@ -885,7 +971,7 @@ static void drawBusAge(bool force) {
   tft.fillRect(BUS_AGE_NUM_L, 1, BUS_AGE_NUM_R - BUS_AGE_NUM_L + 1, 16, COL_BG);
   tft.setTextColor(c, COL_BG);
   tft.setTextDatum(MR_DATUM);
-  tft.setTextFont(2);
+  font_use(UI_FONT_S);
   tft.drawString(String(val), BUS_AGE_NUM_R, BUS_HDR_Y);
 }
 
@@ -928,15 +1014,19 @@ static void drawBusPage() {
 // reasoning as the clock's settings-address footer.
 static void drawBusUnconfigured() {
   tft.fillRect(0, 0, SCREEN_W, CONTENT_H, COL_BG);
-  label_draw(ZH_NEXT_BUS, SCREEN_W / 2, 46, LBL_CENTRE, COL_ACCENT, COL_BG);
-  label_draw(ZH_NOT_SET,  SCREEN_W / 2, 92, LBL_CENTRE, COL_TEXT,   COL_BG);
+  ui_draw(T_NEXT_BUS, SCREEN_W / 2, 46, LBL_CENTRE, COL_ACCENT, COL_BG);
+  ui_draw(T_NOT_SET,  SCREEN_W / 2, 92, LBL_CENTRE, COL_TEXT,   COL_BG);
+  ui_draw(T_ADD_STOPS, SCREEN_W / 2, 138, LBL_CENTRE, COL_DIM, COL_BG);
+
   char net[48];
   netFooter(net, sizeof(net));
-  tft.setTextColor(COL_DIM, COL_BG);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextFont(2);
-  tft.drawString("Add bus stops on the settings page", SCREEN_W / 2, 138);
-  tft.drawString(net, SCREEN_W / 2, 162);
+  if (net[0] == '\0') {
+    ui_draw(T_WIFI_OFFLINE, SCREEN_W / 2, 162, LBL_CENTRE, COL_DIM, COL_BG);
+  } else {
+    UiRun run;
+    run.label(T_SETUP_AT).gap(4).text(net, UI_FONT_S);
+    run.draw(SCREEN_W / 2, 162, LBL_CENTRE, COL_DIM, COL_BG);
+  }
 }
 
 static void busEnter() {
@@ -1016,7 +1106,7 @@ static void busTick() {
 // Bus goes LAST, after Air Quality. Inserting it earlier would rewrite the
 // tap-count muscle memory of four scenes that have not changed in months.
 static Scene scenes[] = {
-  { "Clock",       35000, clockEnter,   clockTick, clockExit },
+  { "Clock",       35000, clockEnter,   clockTick, nullptr },
   { "Weather",     12000, weatherEnter, weatherTick, nullptr },
   { "Sun & Moon",  12000, sunMoonEnter, sunMoonTick, nullptr },
   { "Air Quality", 12000, airQualEnter, airQualTick, nullptr },
@@ -1086,6 +1176,10 @@ static void goToScene(int idx) {
 }
 
 void sceneManager_begin() {
+  // Before the first onEnter, and safe to reach twice: the calibration wizard
+  // restarts the scene machine, and spriteBegin returns immediately if the
+  // buffer is already held.
+  spriteBegin();
   curIdx = firstScene();
   pinned = false;
   freezeUntil = 0;

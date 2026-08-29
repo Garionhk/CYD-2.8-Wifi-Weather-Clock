@@ -73,7 +73,7 @@ app/build/esp32.esp32.esp32/
 | File | Size | Purpose |
 | --- | --- | --- |
 | **`app.ino.merged.bin`** | **4 MB** | **all of the below, pre-combined — this is the one you publish** |
-| `app.ino.bin` | 1.3 MB | the application alone |
+| `app.ino.bin` | 1.4 MB | the application alone |
 | `app.ino.bootloader.bin` | 24 KB | second-stage bootloader |
 | `app.ino.partitions.bin` | 3 KB | partition table |
 | `boot_app0.bin` | 8 KB | OTA selector |
@@ -87,10 +87,10 @@ chances to get an offset wrong, for no benefit.
 Rename it to something meaningful before uploading, e.g.:
 
 ```bash
-cp app/build/esp32.esp32.esp32/app.ino.merged.bin cyd-clock-weather-v2.1.0-4mb.bin
+cp app/build/esp32.esp32.esp32/app.ino.merged.bin cyd-clock-weather-v2.2.0-4mb.bin
 ```
 
-The application is about 41% of the 3 MB app partition, so there is plenty of
+The application is about 45% of the 3 MB app partition, so there is plenty of
 headroom.
 
 `--export-binaries` is what writes these into the sketch folder; without it
@@ -104,7 +104,7 @@ padded with `0xFF`, and that padding covers the NVS partition at `0x9000` and
 the LittleFS partition at `0x310000`. Writing it at `0x0` erases both.
 
 ```
-$ python3 -c "d=open('cyd-clock-weather-v2.1.0-4mb.bin','rb').read(); \
+$ python3 -c "d=open('cyd-clock-weather-v2.2.0-4mb.bin','rb').read(); \
               print(len(d), set(d[0x9000:0x9040]), set(d[0x310000:0x310040]))"
 4194304 {255} {255}
 ```
@@ -127,13 +127,20 @@ settings, calibration and labels all survive.
 
 ### If the Chinese stop names come back as English
 
+An update is not a reason to see English here — the baked images are unchanged
+from v2.1.0. If you do see it:
+
 The device has no CJK font. Stop names and destinations are rendered to 1-bit
 images by your browser and stored on LittleFS (see `docs/decisions.md`); the
 stop *text* lives in NVS in both languages. When the image is missing the bus
 scene draws the English name in the built-in font rather than going blank —
 which is what you will see if the filesystem was erased or was never written
-(for example, a stop added by hand through "Manual entry", or a save made while
-the browser had no internet).
+(for example, a save made while the browser had no internet).
+
+**To get them back, open the settings page and press Save.** Every slot that has
+Chinese text is re-baked on save, whether or not you touch the route pickers —
+so this works for a stop added by hand through "Manual entry" too. Watch the
+serial log for `labels: wrote /l4/...` lines to confirm.
 
 The fix is one step: open the settings page and press **Save & restart**. The
 browser re-bakes and re-uploads the labels. You do not need to pick the routes
@@ -146,10 +153,11 @@ already defaults to the right FQBN.
 ### Why `huge_app`
 
 The default partition scheme reserves a second application slot for OTA updates.
-This firmware has no OTA, so that slot is dead weight — and without the switch
-the build sits at **93%** of the default 1.31 MB app area, which leaves no room
-to grow. `huge_app` gives 3 MB and drops the same image to 41%, and carries an
-896 KB filesystem partition that the bus scene's baked Chinese names live in.
+This firmware has no OTA, so that slot is dead weight — and as of v2.2.0 the
+build **does not fit the default scheme at all**: 1.43 MB against a 1.31 MB app
+area. (It was 93% of it at v2.1.0, which is why the switch was made then rather
+than now.) `huge_app` gives 3 MB, which the same image fills to 45%, and carries
+an 896 KB filesystem partition that the bus scene's baked Chinese names live in.
 
 The scheme is baked into the partition table, which the merged image carries, so
 it travels with the firmware automatically — nobody flashing it has to know or
@@ -157,7 +165,7 @@ match the setting.
 
 Both `tools/build_all.sh` and `tools/flash.sh` default to it. An `FQBN` override
 **replaces** the default wholesale, so any override has to carry
-`PartitionScheme=huge_app` too or you are silently back at 93%.
+`PartitionScheme=huge_app` too, or the build fails to fit.
 
 ### Flash size
 
@@ -195,7 +203,7 @@ Publish a checksum alongside the binary, generated from the renamed file you are
 actually uploading:
 
 ```bash
-shasum -a 256 cyd-clock-weather-v2.1.0-4mb.bin > SHA256SUMS
+shasum -a 256 cyd-clock-weather-v2.2.0-4mb.bin > SHA256SUMS
 ```
 
 ---
@@ -248,7 +256,7 @@ esptool --port /dev/cu.usbserial-1440 erase-flash
 Then write the firmware — one file, one address:
 
 ```bash
-esptool --port /dev/cu.usbserial-1440 --baud 460800 write-flash 0x0 cyd-clock-weather-v2.1.0-4mb.bin
+esptool --port /dev/cu.usbserial-1440 --baud 460800 write-flash 0x0 cyd-clock-weather-v2.2.0-4mb.bin
 ```
 
 That is the whole job. **An ESP32 is not flashed like an ESP8266** — it needs a

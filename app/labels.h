@@ -20,6 +20,14 @@
 // background as it goes -- which is what makes the compare-and-redraw partial
 // repaint used everywhere else in this project work for Chinese too.
 //
+// A 4-bpp alpha version of this shipped briefly and was withdrawn. It rendered
+// in the wrong colours on the panel -- pushImage sends a uint16_t array as raw
+// little-endian bytes and the ILI9341 wants each pixel high byte first, so it
+// needed setSwapBytes(true) that it did not have. The deeper reason not to
+// bring it back is that Chinese would have been the only thing on the display
+// using a hand-written blit path: the Latin is antialiased by TFT_eSPI itself
+// (see ui_fonts.h), which costs us no draw code at all.
+//
 // Why LittleFS and not NVS for the user labels: huge_app leaves an 896 KB
 // filesystem partition completely unused, while NVS is 20 KB and already holds
 // settings and touch calibration. ~1.3 KB per slot is uncomfortable in one and

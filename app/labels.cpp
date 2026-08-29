@@ -1,7 +1,9 @@
 #include "labels.h"
 #include "theme.h"
+#include "uitext.h"
 #include "settings.h"   // BUS_SLOTS
 #include <LittleFS.h>
+#include <string.h>
 
 // One shared read buffer for user labels, sized by the LABEL_MAX_* caps.
 // Deliberately static rather than heap: this scene runs every few minutes for
@@ -14,6 +16,88 @@ static uint8_t  userBuf[LABEL_BUF];
 static int      userBufSlot  = -1;      // which (slot, which) userBuf holds
 static bool     fsOk = false;
 
+// Back in /l, where 1-bpp labels have always lived. /l4 was the 4-bpp
+// experiment's directory; migrateFrom4bpp below empties it on the way past.
+static const char* LABEL_DIR = "/l";
+
+// Convert any 4-bpp labels back to 1 bpp.
+//
+// The alpha format shipped briefly and was withdrawn: it rendered in wrong
+// colours on the panel (pushImage needs setSwapBytes; see blit above), and
+// antialiased Chinese was not worth owning a blit path for. A device that took
+// that build has its labels in /l4 and an empty /l, so this walks them back --
+// a nibble of 8 or more becomes ink, which is the same midpoint the generator
+// thresholds at, and is exact for labels that were themselves converted up from
+// 1 bpp because those nibbles are only ever 0x0 or 0xF.
+//
+// A device that never took that build has no /l4 and skips this entirely.
+bool label_saveUser(int slot, UserLabel which, const uint8_t* data, size_t len);
+
+static void migrateFrom4bpp() {
+  if (!LittleFS.exists("/l4")) return;
+  if (!LittleFS.exists(LABEL_DIR)) LittleFS.mkdir(LABEL_DIR);
+
+  int moved = 0;
+  for (int slot = 0; slot < BUS_SLOTS; slot++) {
+    for (int w = 0; w < 2; w++) {
+      const UserLabel which = (w == 0) ? UL_STOP : UL_DEST;
+
+      char oldPath[24];
+      snprintf(oldPath, sizeof(oldPath), "/l4/%d%c.bin",
+               slot, which == UL_STOP ? 's' : 'd');
+      fs::File f = LittleFS.open(oldPath, "r");
+      if (!f) continue;
+
+      uint8_t hdr[2];
+      if (f.read(hdr, 2) != 2) { f.close(); continue; }
+      const int lw = hdr[0], lh = hdr[1];
+      if (lw == 0 || lh == 0 || lw > LABEL_MAX_W || lh > LABEL_MAX_H) {
+        f.close();
+        continue;
+      }
+
+      // Row at a time: the 4-bpp source row is up to 116 bytes of stack, rather
+      // than a second full-size buffer competing with the one userBuf holds.
+      const int srcRow = (lw + 1) / 2;
+      const int dstRow = (lw + 7) / 8;
+      userBuf[0] = (uint8_t)lw;
+      userBuf[1] = (uint8_t)lh;
+
+      bool ok = true;
+      uint8_t row[(LABEL_MAX_W + 1) / 2];
+      for (int y = 0; y < lh && ok; y++) {
+        if (f.read(row, srcRow) != srcRow) { ok = false; break; }
+        uint8_t* dst = userBuf + 2 + (size_t)y * dstRow;
+        memset(dst, 0, dstRow);
+        for (int x = 0; x < lw; x++) {
+          const uint8_t two = row[x >> 1];
+          const uint8_t nib = (x & 1) ? (two & 0x0F) : (two >> 4);
+          if (nib >= 8) dst[x >> 3] |= 0x80 >> (x & 7);
+        }
+      }
+      f.close();
+      if (!ok) {
+        Serial.printf("labels: %s is truncated -- not migrating\n", oldPath);
+        continue;
+      }
+
+      userBufSlot = -1;                       // userBuf no longer holds a read
+      if (label_saveUser(slot, which, userBuf, 2 + (size_t)dstRow * lh)) moved++;
+    }
+  }
+
+  for (int slot = 0; slot < BUS_SLOTS; slot++) {
+    for (int w = 0; w < 2; w++) {
+      char p[24];
+      snprintf(p, sizeof(p), "/l4/%d%c.bin", slot, w == 0 ? 's' : 'd');
+      LittleFS.remove(p);
+    }
+  }
+  LittleFS.rmdir("/l4");
+  Serial.printf("labels: migrated %d label(s) from 4-bpp /l4 back to %s\n",
+                moved, LABEL_DIR);
+}
+
 void label_begin() {
   // begin(true) formats when the partition has never held a filesystem, which
   // is every device flashed before this firmware existed. It costs a couple of
@@ -24,7 +108,10 @@ void label_begin() {
                    "English names will be used");
     return;
   }
-  if (!LittleFS.exists("/l")) LittleFS.mkdir("/l");
+  if (!LittleFS.exists(LABEL_DIR)) LittleFS.mkdir(LABEL_DIR);
+
+  migrateFrom4bpp();
+
   Serial.printf("labels: LittleFS %u/%u bytes used\n",
                 (unsigned)LittleFS.usedBytes(), (unsigned)LittleFS.totalBytes());
 }
@@ -36,6 +123,14 @@ bool label_fsReady() { return fsOk; }
 // ---------------------------------------------------------------------------
 
 // `y` is the vertical centre; `align` picks what `x` means horizontally.
+//
+// One library call, and that is the point. The 4-bpp version of this built
+// RGB565 rows by hand and pushed them through pushImage -- which needs
+// setSwapBytes(true), because pushImage sends a uint16_t array as raw
+// little-endian bytes while the ILI9341 expects each pixel high byte first.
+// Without it every label came out in wrong colours. drawBitmap has no such
+// trap: it takes the two colours as arguments and does its own byte order, the
+// same as every other draw call in this project.
 static void blit(const uint8_t* blob, int x, int y, LabelAlign align,
                  uint16_t fg, uint16_t bg) {
   const int w = blob[0], h = blob[1];
@@ -62,7 +157,7 @@ void label_draw(ZhLabel id, int x, int y, LabelAlign align, uint16_t fg, uint16_
 // ---------------------------------------------------------------------------
 
 static void userPath(int slot, UserLabel which, char* out, size_t n) {
-  snprintf(out, n, "/l/%d%c.bin", slot, which == UL_STOP ? 's' : 'd');
+  snprintf(out, n, "%s/%d%c.bin", LABEL_DIR, slot, which == UL_STOP ? 's' : 'd');
 }
 
 // Pull one label into userBuf, unless it is already there. The one-entry cache
@@ -142,12 +237,17 @@ void label_selfTest(uint32_t holdMs) {
   tft.fillScreen(COL_BG);
   tft.setTextColor(COL_ACCENT, COL_BG);
   tft.setTextDatum(TL_DATUM);
-  tft.setTextFont(2);
+  font_use(UI_FONT_S);
   tft.drawString("zh label self-test", 4, 2);
 
   // Laid out at the sizes the scene actually uses, so what you are checking is
   // what will ship -- a proof at 32 px says nothing about 18 px, which is where
   // 1-bit thresholding first hurts.
+  //
+  // With the vocabulary now past ninety entries this shows only the first
+  // screenful; tools/preview_labels.py renders the whole set on the host,
+  // from the same generated bytes, and is the better instrument for a sweep.
+  // This one earns its keep by proving the DEVICE draws them.
   int x = 4, y = 34;
   for (uint8_t i = 0; i < ZH_COUNT; i++) {
     const ZhLabel id = (ZhLabel)i;

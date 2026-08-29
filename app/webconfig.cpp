@@ -75,10 +75,10 @@ static String esc(const String& s) {
   return o;
 }
 
+// Opens at <style>, not at <!doctype>: sendPage emits the head before this so
+// it can put a translated <title> and the __zh flag in front of everything.
 static const char PAGE_HEAD[] PROGMEM =
-  "<!doctype html><html><head><meta charset=utf-8>"
-  "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
-  "<title>CYD Clock Setup</title><style>"
+  "<style>"
   "body{font-family:system-ui,-apple-system,sans-serif;background:#111;color:#eee;margin:0;padding:16px}"
   ".w{max-width:520px;margin:0 auto}"
   "h1{font-size:20px;margin:0 0 4px}"
@@ -110,19 +110,23 @@ static const char PAGE_HEAD[] PROGMEM =
   ".bpick select{margin-bottom:6px}"
   ".prev{background:#000;border:1px solid #333;border-radius:4px;margin-top:6px;"
   "image-rendering:pixelated;max-width:100%}"
-  "</style></head><body><div class=w>"
-  "<h1>CYD Clock &amp; Weather</h1>"
-  "<p class=sub>Settings are stored on the device. Saving restarts it.</p>";
+  "</style></head><body><div class=w>";
 
+// The heading and its subtitle, split out of PAGE_HEAD for the same reason the
+// submit button was: a PROGMEM blob holds one language.
+
+// The submit button is no longer in here: it is the one piece of PAGE_TAIL
+// that has words in it, and a PROGMEM blob cannot carry two languages.
 static const char PAGE_TAIL[] PROGMEM =
-  "<button type=submit>Save &amp; restart</button></form>"
+  "</form>"
   "<script>"
-  "function scan(){var m=document.getElementById('sm');m.textContent='Scanning...';"
+  "function T(en,zh){return window.__zh?zh:en}"
+  "function scan(){var m=document.getElementById('sm');m.textContent=T('Scanning...','掃描中…');"
   "fetch('/scan').then(function(r){return r.json()}).then(function(n){"
   "var d=document.getElementById('nets');d.innerHTML='';"
   "n.forEach(function(s){var o=document.createElement('option');o.value=s;d.appendChild(o)});"
-  "m.textContent=n.length?n.length+' found - tap the field above to pick one':'none found';"
-  "}).catch(function(){m.textContent='Scan failed'})}"
+  "m.textContent=n.length?n.length+T(' found - tap the field above to pick one',' 個網絡 - 點上面的欄位選擇'):T('none found','找不到網絡');"
+  "}).catch(function(){m.textContent=T('Scan failed','掃描失敗')})}"
   "</script><script src=/bus.js defer></script></div></body></html>";
 
 // What a field should show when the page is rendered.
@@ -140,6 +144,26 @@ static String field(const char* name, const String& fallback) {
   return server.hasArg(name) ? server.arg(name) : fallback;
 }
 
+// ---------------------------------------------------------------------------
+// Bilingual page text
+// ---------------------------------------------------------------------------
+// The panel needs a whole baked-bitmap pipeline to show a Chinese character.
+// This page needs none of it -- the browser has real fonts and PAGE_HEAD has
+// declared <meta charset=utf-8> since the beginning. So the settings page is
+// the one surface where translating is just picking a different literal.
+//
+// L() returns a flash string so the two alternatives cost the same RAM as the
+// one literal did: neither is copied until it is appended.
+//
+// The language shown is the SAVED one, not the one selected in the form. A page
+// that re-rendered itself in a new language on a rejected save would move every
+// label the user was reading while they were reading it; the device reboots on
+// a successful save anyway, and the reloaded page comes back translated.
+static const __FlashStringHelper* L(const __FlashStringHelper* en,
+                                    const __FlashStringHelper* zh) {
+  return (g_settings.lang == LANG_ZH) ? zh : en;
+}
+
 static void sendPage(const String& error = String()) {
   String h;
   // ~4.7-5.0 KB before the bus fieldset, which adds ~1.5-2 KB. A power of two
@@ -147,7 +171,20 @@ static void sendPage(const String& error = String()) {
   // this String is built inside loop(), interleaved with clockEnter's 10 KB
   // contiguous sprite allocation, and that is the pairing that hurts.
   h.reserve(8192);
+  // Before PAGE_HEAD's <style>: the title has words in it, and __zh has to be
+  // set before /bus.js runs so the picker comes up in the same language.
+  h += F("<!doctype html><html><head><meta charset=utf-8>"
+         "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
+         "<title>");
+  h += L(F("CYD Clock Setup"), F("CYD 時鐘設定"));
+  h += F("</title><script>window.__zh=");
+  h += (g_settings.lang == LANG_ZH) ? F("true") : F("false");
+  h += F("</script>");
   h += FPSTR(PAGE_HEAD);
+  h += F("<h1>CYD Clock &amp; Weather</h1><p class=sub>");
+  h += L(F("Settings are stored on the device. Saving restarts it."),
+         F("設定儲存在裝置上。儲存後會重新啟動。"));
+  h += F("</p>");
 
   // True only when re-rendering a rejected POST. Checkboxes need it: an
   // unticked box is simply absent from the body, which is indistinguishable
@@ -160,33 +197,49 @@ static void sendPage(const String& error = String()) {
          "<input type=hidden name=posted value=1>");
 
   // --- WiFi
-  h += F("<fieldset><legend>WiFi</legend><label>Network (2.4 GHz only)</label>"
-         "<input name=ssid list=nets required value=\"");
+  h += F("<fieldset><legend>WiFi</legend><label>");
+  h += L(F("Network (2.4 GHz only)"), F("網絡（只支援 2.4 GHz）"));
+  h += F("</label><input name=ssid list=nets required value=\"");
   h += esc(field("ssid", g_settings.wifiSsid));
   h += F("\"><datalist id=nets></datalist>"
-         "<button type=button class=sec onclick=scan()>Scan for networks</button>"
-         "<div class=hint id=sm></div>"
-         "<label>Password</label><input name=pass type=password placeholder=\"");
-  h += g_settings.wifiPass.length() ? F("leave blank to keep saved password")
-                                    : F("network password");
-  h += F("\"><div class=hint>The ESP32 has no 5 GHz radio, so a 5 GHz-only "
-         "network will not appear.</div></fieldset>");
+         "<button type=button class=sec onclick=scan()>");
+  h += L(F("Scan for networks"), F("掃描網絡"));
+  h += F("</button><div class=hint id=sm></div><label>");
+  h += L(F("Password"), F("密碼"));
+  h += F("</label><input name=pass type=password placeholder=\"");
+  h += g_settings.wifiPass.length()
+         ? L(F("leave blank to keep saved password"), F("留空即保留已儲存的密碼"))
+         : L(F("network password"), F("網絡密碼"));
+  h += F("\"><div class=hint>");
+  h += L(F("The ESP32 has no 5 GHz radio, so a 5 GHz-only network will not appear."),
+         F("ESP32 沒有 5 GHz 無線電，因此只提供 5 GHz 的網絡不會出現。"));
+  h += F("</div></fieldset>");
 
   // --- Location
-  h += F("<fieldset><legend>Location</legend><div class=row>"
-         "<div><label>Latitude</label>"
-         "<input name=lat type=number step=any min=-90 max=90 required value=\"");
+  h += F("<fieldset><legend>");
+  h += L(F("Location"), F("位置"));
+  h += F("</legend><div class=row><div><label>");
+  h += L(F("Latitude"), F("緯度"));
+  h += F("</label><input name=lat type=number step=any min=-90 max=90 required value=\"");
   h += esc(field("lat", String(g_settings.latitude, 4)));
-  h += F("\"></div><div><label>Longitude</label>"
-         "<input name=lon type=number step=any min=-180 max=180 required value=\"");
+  h += F("\"></div><div><label>");
+  h += L(F("Longitude"), F("經度"));
+  h += F("</label><input name=lon type=number step=any min=-180 max=180 required value=\"");
   h += esc(field("lon", String(g_settings.longitude, 4)));
-  h += F("\"></div></div><div class=hint>Decimal degrees. Longitude is negative "
-         "west of Greenwich, so everywhere in the Americas is negative. "
-         "Right-click your location in Google Maps to copy the pair. "
-         "Two decimals (~1&nbsp;km) is plenty.</div></fieldset>");
+  h += F("\"></div></div><div class=hint>");
+  h += L(F("Decimal degrees. Longitude is negative west of Greenwich, so "
+           "everywhere in the Americas is negative. Right-click your location "
+           "in Google Maps to copy the pair. Two decimals (~1&nbsp;km) is plenty."),
+         F("十進制度數。格林威治以西的經度為負數，因此整個美洲都是負數。"
+           "在 Google 地圖上右鍵點擊你的位置即可複製座標。兩位小數（約 1&nbsp;公里）已經足夠。"));
+  h += F("</div></fieldset>");
 
   // --- Time zone
-  h += F("<fieldset><legend>Time zone</legend><label>Zone</label><select name=tzsel>");
+  h += F("<fieldset><legend>");
+  h += L(F("Time zone"), F("時區"));
+  h += F("</legend><label>");
+  h += L(F("Zone"), F("時區"));
+  h += F("</label><select name=tzsel>");
   const String tzsel = field("tzsel", g_settings.tz);
   bool matched = false;
   for (int i = 0; i < TZ_COUNT; i++) {
@@ -198,23 +251,43 @@ static void sendPage(const String& error = String()) {
     h += TZ_OPTIONS[i].label;
     h += F("</option>");
   }
-  h += F("</select><label>Or a custom POSIX TZ string</label>"
-         "<input name=tzcustom placeholder=\"e.g. PST8PDT,M3.2.0,M11.1.0\" value=\"");
+  h += F("</select><label>");
+  h += L(F("Or a custom POSIX TZ string"), F("或自訂 POSIX TZ 字串"));
+  h += F("</label><input name=tzcustom placeholder=\"e.g. PST8PDT,M3.2.0,M11.1.0\" value=\"");
   h += esc(field("tzcustom", matched ? String() : g_settings.tz));
-  h += F("\"><div class=hint>Currently <b>");
+  h += F("\"><div class=hint>");
+  h += L(F("Currently <b>"), F("目前為 <b>"));
   h += esc(g_settings.tz);
-  h += F("</b>. A custom value overrides the dropdown. These are POSIX strings, "
-         "not names like Europe/London.</div></fieldset>");
+  h += F("</b>. ");
+  h += L(F("A custom value overrides the dropdown. These are POSIX strings, "
+           "not names like Europe/London."),
+         F("自訂值會覆蓋下拉選單。這些是 POSIX 字串，並非 Europe/London 這類名稱。"));
+  h += F("</div></fieldset>");
 
   // --- Units
   const bool imperial = field("units", String(g_settings.units)).toInt() == UNITS_IMPERIAL;
-  h += F("<fieldset><legend>Units</legend><div class=radio>"
-         "<label><input type=radio name=units value=0");
+  h += F("<fieldset><legend>");
+  h += L(F("Units"), F("單位"));
+  h += F("</legend><div class=radio><label><input type=radio name=units value=0");
   h += imperial ? F(">") : F(" checked>");
-  h += F("Metric (&deg;C, km/h, hPa)</label>"
-         "<label><input type=radio name=units value=1");
+  h += L(F("Metric (&deg;C, km/h, hPa)"), F("公制（&deg;C、km/h、hPa）"));
+  h += F("</label><label><input type=radio name=units value=1");
   h += imperial ? F(" checked>") : F(">");
-  h += F("Imperial (&deg;F, mph, inHg)</label></div></fieldset>");
+  h += L(F("Imperial (&deg;F, mph, inHg)"), F("英制（&deg;F、mph、inHg）"));
+  h += F("</label></div></fieldset>");
+
+  // --- Language
+  // Applies to the panel and to this page. It does NOT touch the stop names in
+  // the bus scene, which are Chinese either way because that is what is written
+  // on the stop.
+  const bool zh = field("lang", String(g_settings.lang)).toInt() == LANG_ZH;
+  h += F("<fieldset><legend>Language / 語言</legend><div class=radio>"
+         "<label><input type=radio name=lang value=0");
+  h += zh ? F(">") : F(" checked>");
+  h += F("English</label>"
+         "<label><input type=radio name=lang value=1");
+  h += zh ? F(" checked>") : F(">");
+  h += F("中文 (繁體)</label></div></fieldset>");
 
   // --- Scenes
   //
@@ -222,7 +295,9 @@ static void sendPage(const String& error = String()) {
   // who never looks at air quality should not have to re-flash to stop it
   // coming round, which is the same argument that moved WiFi credentials out
   // of config.h.
-  h += F("<fieldset><legend>Screens</legend>");
+  h += F("<fieldset><legend>");
+  h += L(F("Screens"), F("畫面"));
+  h += F("</legend>");
   for (int i = 0; i < sceneManager_total() && i < SCENE_SLOTS; i++) {
     // An unchecked checkbox is not submitted at all, so on a re-render after a
     // validation error the absence of `sc<i>` is the user's "off" -- but on a
@@ -240,11 +315,14 @@ static void sendPage(const String& error = String()) {
     h += esc(field((String("sd") + i).c_str(), String(g_settings.sceneDwellS[i])));
     h += F("\">s</span></div>");
   }
-  h += F("<div class=hint>Unticked screens are skipped by the rotation and lose "
-         "their dot in the status bar; their timing is remembered for when you "
-         "tick them again. At least one has to stay on. A tap still advances to "
-         "the next screen, and a long press pins the one you are looking at.</div>"
-         "</fieldset>");
+  h += F("<div class=hint>");
+  h += L(F("Unticked screens are skipped by the rotation and lose their dot in "
+           "the status bar; their timing is remembered for when you tick them "
+           "again. At least one has to stay on. A tap still advances to the next "
+           "screen, and a long press pins the one you are looking at."),
+         F("未勾選的畫面會被輪播略過，狀態列上的圓點也會消失；再次勾選時會沿用原本的秒數。"
+           "至少要保留一個畫面。輕觸仍可切換至下一個畫面，長按則會固定目前畫面。"));
+  h += F("</div></fieldset>");
 
   // --- Bus stops
   //
@@ -272,22 +350,30 @@ static void sendPage(const String& error = String()) {
     int configured = 0;
     for (int i = 0; i < BUS_SLOTS; i++) if (g_settings.buses[i].valid()) configured++;
     if (configured) {
-      h += F("<fieldset><legend>Next bus (Hong Kong)</legend><div class=hint>");
+      h += F("<fieldset><legend>");
+      h += L(F("Next bus (Hong Kong)"), F("下一班車（香港）"));
+      h += F("</legend><div class=hint>");
       h += String(configured);
-      h += F(" stop(s) configured, and they are kept. Route lookup needs "
-             "internet access, which this setup network does not have &mdash; "
-             "reconnect the clock to your WiFi and open its settings page there "
-             "to change them.</div></fieldset>");
+      h += L(F(" stop(s) configured, and they are kept. Route lookup needs "
+               "internet access, which this setup network does not have &mdash; "
+               "reconnect the clock to your WiFi and open its settings page there "
+               "to change them."),
+             F(" 個車站已設定，並會保留。查詢路線需要連上互聯網，"
+               "而這個設定網絡並沒有 &mdash; 請將時鐘接回你的 WiFi，"
+               "再從那裏開啟設定頁修改。"));
+      h += F("</div></fieldset>");
     }
   } else {
-    h += F("<fieldset><legend>Next bus (Hong Kong)</legend>"
-           "<div class=hint id=bne></div>");
+    h += F("<fieldset><legend>");
+    h += L(F("Next bus (Hong Kong)"), F("下一班車（香港）"));
+    h += F("</legend><div class=hint id=bne></div>");
     for (int i = 0; i < BUS_SLOTS; i++) {
       char nm[8];
       snprintf(nm, sizeof(nm), "bus%d", i);
       const String cur = field(nm, busStop_pack(g_settings.buses[i]));
 
-      h += F("<div class=slot><label>Stop ");
+      h += F("<div class=slot><label>");
+      h += L(F("Stop "), F("車站 "));
       h += String(i + 1);
       h += F("</label><div class=bsum id=bsum");
       h += String(i);
@@ -295,22 +381,32 @@ static void sendPage(const String& error = String()) {
       h += esc(busStop_describe(g_settings.buses[i]));
       h += F("</div><div id=bpick");
       h += String(i);
-      h += F("></div><details><summary>Manual entry</summary><input name=");
+      h += F("></div><details><summary>");
+      h += L(F("Manual entry"), F("手動輸入"));
+      h += F("</summary><input name=");
       h += nm;
       h += F(" id=");
       h += nm;
       h += F(" value=\"");
       h += esc(cur);
       h += F("\"><div class=hint>op|route|stop|serviceType|dir|routeId|routeSeq|"
-             "stopSeq|stopTC|stopEN|destTC|destEN &mdash; op 0=KMB 1=Citybus "
-             "2=minibus 3=Long Win. Empty clears the slot.</div></details></div>");
+             "stopSeq|stopTC|stopEN|destTC|destEN &mdash; ");
+      h += L(F("op 0=KMB 1=Citybus 2=minibus 3=Long Win. Empty clears the slot."),
+             F("op 0=九巴 1=城巴 2=小巴 3=龍運。留空即清除該格。"));
+      h += F("</div></details></div>");
     }
-    h += F("<div class=hint>Chinese stop names are drawn on the display as images "
-           "baked by this browser, because the device has no Chinese font. If the "
-           "names ever revert to English, open this page and save again to "
-           "restore them.</div></fieldset>");
+    h += F("<div class=hint>");
+    h += L(F("Chinese stop names are drawn on the display as images baked by this "
+             "browser, because the device has no Chinese font. If the names ever "
+             "revert to English, open this page and save again to restore them."),
+           F("中文站名是由這個瀏覽器製成圖像後顯示在螢幕上的，因為裝置本身沒有中文字型。"
+             "若站名變回英文，開啟此頁再儲存一次即可復原。"));
+    h += F("</div></fieldset>");
   }
 
+  h += F("<button type=submit>");
+  h += L(F("Save &amp; restart"), F("儲存並重新啟動"));
+  h += F("</button>");
   h += FPSTR(PAGE_TAIL);
   const size_t len = h.length();
   server.send(200, "text/html", h);
@@ -370,12 +466,16 @@ static void handleSave() {
   const float lon = lonS.toFloat();
 
   String err;
-  if (ssid.isEmpty())                    err = F("Network name is required.");
+  if (ssid.isEmpty())                    err = L(F("Network name is required."),
+                                                 F("必須填寫網絡名稱。"));
   else if (latS.isEmpty() || lonS.isEmpty())
-                                         err = F("Latitude and longitude are required.");
-  else if (lat < -90.0f  || lat > 90.0f) err = F("Latitude must be between -90 and 90.");
+                                         err = L(F("Latitude and longitude are required."),
+                                                 F("必須填寫緯度和經度。"));
+  else if (lat < -90.0f  || lat > 90.0f) err = L(F("Latitude must be between -90 and 90."),
+                                                 F("緯度必須介乎 -90 至 90。"));
   else if (lon < -180.0f || lon > 180.0f)
-                                         err = F("Longitude must be between -180 and 180.");
+                                         err = L(F("Longitude must be between -180 and 180."),
+                                                 F("經度必須介乎 -180 至 180。"));
   // Bus slots. Only shape can be checked here: confirming that a stop id really
   // exists would mean an internet call inside a request handler, which is
   // exactly the blocking the appliance rule in docs/decisions.md forbids. The
@@ -399,7 +499,8 @@ static void handleSave() {
     v.trim();
     if (v.isEmpty()) continue;                       // an empty field clears it
     if (!busStop_unpack(v, parsed[i]))
-      err = String(F("Stop ")) + String(i + 1) + F(" is not a valid entry.");
+      err = String(L(F("Stop "), F("車站 "))) + String(i + 1)
+          + L(F(" is not a valid entry."), F(" 的內容無效。"));
   }
 
   // Scenes. Rejecting an all-off configuration here rather than coping with it
@@ -417,11 +518,13 @@ static void handleSave() {
                    ? (uint16_t)v : g_settings.sceneDwellS[i];
     if (err.isEmpty() && v != 0 &&
         (v < SCENE_DWELL_MIN_S || v > SCENE_DWELL_MAX_S))
-      err = String(F("Screen times must be between ")) + SCENE_DWELL_MIN_S
-          + F(" and ") + SCENE_DWELL_MAX_S + F(" seconds.");
+      err = String(L(F("Screen times must be between "), F("畫面秒數必須介乎 ")))
+          + SCENE_DWELL_MIN_S + L(F(" and "), F(" 至 ")) + SCENE_DWELL_MAX_S
+          + L(F(" seconds."), F(" 秒。"));
   }
   if (err.isEmpty() && scOnCount == 0)
-    err = F("At least one screen has to stay switched on.");
+    err = L(F("At least one screen has to stay switched on."),
+            F("至少要保留一個畫面開啟。"));
 
   if (err.length()) { sendPage(err); return; }
 
@@ -448,19 +551,37 @@ static void handleSave() {
   g_settings.tz        = tzc.length() ? tzc : server.arg("tzsel");
   g_settings.units     = (server.arg("units").toInt() == UNITS_IMPERIAL)
                            ? UNITS_IMPERIAL : UNITS_METRIC;
+  g_settings.lang      = (server.arg("lang").toInt() == LANG_ZH)
+                           ? LANG_ZH : LANG_EN;
   settings_save();
   saved = true;
 
-  server.send(200, "text/html",
-    F("<!doctype html><html><head><meta charset=utf-8>"
-      "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
-      "<title>Saved</title><style>body{font-family:system-ui,sans-serif;"
-      "background:#111;color:#eee;padding:40px 16px;text-align:center}"
-      "h1{color:#0dd;font-size:20px}p{color:#999;font-size:14px}</style></head>"
-      "<body><h1>Saved</h1><p>The clock is restarting with the new settings.</p>"
-      "<p>If you changed the network, this page will not reload &mdash; the "
-      "device is joining the network you selected. Its address appears on the "
-      "clock screen.</p></body></html>"));
+  // Built rather than sent as one blob, because it has to say all this twice.
+  // Note it uses the language that was just SAVED -- g_settings is already
+  // updated by the time we get here, so the confirmation is the first page the
+  // user sees in their new choice.
+  String done;
+  done.reserve(1024);
+  done += F("<!doctype html><html><head><meta charset=utf-8>"
+            "<meta name=viewport content=\"width=device-width,initial-scale=1\">"
+            "<title>");
+  done += L(F("Saved"), F("已儲存"));
+  done += F("</title><style>body{font-family:system-ui,sans-serif;"
+            "background:#111;color:#eee;padding:40px 16px;text-align:center}"
+            "h1{color:#0dd;font-size:20px}p{color:#999;font-size:14px}</style>"
+            "</head><body><h1>");
+  done += L(F("Saved"), F("已儲存"));
+  done += F("</h1><p>");
+  done += L(F("The clock is restarting with the new settings."),
+            F("時鐘正在以新設定重新啟動。"));
+  done += F("</p><p>");
+  done += L(F("If you changed the network, this page will not reload &mdash; the "
+              "device is joining the network you selected. Its address appears "
+              "on the clock screen."),
+            F("如果你更改了網絡，此頁不會重新載入 &mdash; 裝置正在加入你選擇的網絡。"
+              "它的位址會顯示在時鐘畫面上。"));
+  done += F("</p></body></html>");
+  server.send(200, "text/html", done);
 }
 
 static void handleBusJs() {

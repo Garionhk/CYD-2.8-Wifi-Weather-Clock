@@ -2,6 +2,112 @@
 
 Running log of choices that change scope or architecture. Newest first.
 
+## 2026-08-24 — The panel speaks two languages, and antialiases both
+
+**Context.** Two requests that turned out to be one problem: a Chinese/English
+toggle across the whole system, and antialiased text. They meet in the same
+place, because the reason the panel could not do either was the same — every
+glyph on it was one bit deep, and only the bus scene had any Chinese at all.
+
+**Three pieces.**
+
+**1. Chinese stays 1 bpp.** It was changed to 4-bpp alpha and changed back the
+same day, which is worth recording because the reasoning outlives the reversal.
+
+The case for alpha was real: a hard `alpha > 128` threshold at 18 px either
+fattens strokes into a blob or drops the interior out of dense glyphs (灣, 觀),
+and no single value avoids both. Sixteen levels ends that trade for 4x the flash
+— ~53 KB against 1.5 MB free, which is nothing.
+
+It reached the panel in the wrong colours, and the cause is a trap worth naming:
+**`pushImage` sends a `uint16_t` array as raw little-endian bytes**, while the
+ILI9341 wants each RGB565 pixel high byte first. It needs `setSwapBytes(true)`,
+which the blitter did not have. Every other draw call in this project takes its
+colours as arguments and sorts out byte order internally, so this was the only
+place the trap existed — and, accordingly, the only thing on screen that broke.
+
+That is a one-line fix, so it is not why the format was withdrawn. It was
+withdrawn for the shape it left behind: Chinese would have been the **only**
+thing on the display going through a hand-written blit path. The Latin is
+antialiased by TFT_eSPI itself and costs us no draw code at all, and the panel's
+Chinese is bitmap art either way. Owning a blitter, a second on-disk format, a
+migration in each direction and a byte-order footgun — to smooth the edges of
+glyphs that are already pictures — is a bad trade at any flash budget.
+
+So `blit()` is a single `drawBitmap` call again. A device that took the alpha
+build converts `/l4` back to `/l` on boot, losslessly: those nibbles are only
+ever `0x0` or `0xF`, and the round trip is byte-identical at every width.
+
+**What did survive from that day** is the fix underneath it. The browser now
+bakes **every** slot that has Chinese text on save, not just the ones re-picked
+in that page session. The old behaviour meant a stop entered through "Manual
+entry" never got a bitmap at all, and a lost bitmap could only be restored by
+drilling the entire route down again — a plain Save uploaded nothing, so the
+obvious remedy was a button that did nothing. Uploads run two at a time through
+the `mapLimit` helper the stop lookups already use.
+
+**2. Latin got .vlw smooth fonts.** `SMOOTH_FONT` had been set in our
+`User_Setup` templates since the beginning and nothing ever used it.
+`tools/gen_vlw.py` bakes four subsets from Helvetica Neue — subsets, not whole
+fonts, because a full ASCII set at 75 px is ~350 KB while the eleven characters
+the clock draws are ~20 KB. The pixel size is *solved for*, not guessed: every
+`MC`/`ML`/`MR` datum in this project centres against `fontHeight()`, so the
+generator walks the range and takes the largest size that hits the built-in
+font's height exactly.
+
+Digit-only subsets are solved differently. Matching the *box* would have shrunk
+the clock — Font 8's digits fill all 75 px, Helvetica's inside a 75 px box are
+~53 px of ink — so those match digit height instead and write `ascent = that
+height, descent = 0`, which makes `fontHeight()` equal the ink and lets
+`drawGlyph` centre them with no fudge factor anywhere.
+
+**The clock kept its LCD look.** Font 8 was seven-segment and a grotesque at
+75 px is a different object on a wall, so the XL subset is baked from **DSEG7
+Classic Bold**, vendored in `tools/fonts/` with its OFL licence. A build that
+depends on a font the developer happens to have installed is not reproducible,
+which is also why the `seg7` face has no fallback: if the file is missing the
+build stops rather than quietly rendering the clock in Helvetica.
+
+**The digit sprite is now permanent.** It used to be created in `clockEnter` and
+freed in `clockExit` — a 10 KB *contiguous* allocation perhaps four hundred
+times a day. `labels.cpp` is written entirely around not doing that to this
+sprite; the sprite was doing it to itself. It now lives for the life of the
+device, which is what makes it safe for `font_use()` to swap smooth-font metrics
+on the same heap: only one font can be loaded at a time and each load mallocs
+seven arrays, so the swap is real churn, and nothing else wants a block that
+size once it is claimed at boot.
+
+**3. One dispatch point.** `app/uitext.{h,cpp}` holds a `UiText` id per string,
+carrying both an English literal with its font and the baked Chinese that
+replaces it. The font is in the table rather than at the call site because the
+two halves must be chosen together — the Chinese is baked at a fixed pixel size
+and the English has to sit in the same slot. A `static_assert` ties the table to
+the enum.
+
+Text with a runtime value in it does not go through the table: `UiRun` measures
+a left-to-right run of labels and Latin segments before drawing it, because the
+two languages order the parts differently — `in 2h 05m` against `2小時05分後` —
+and no format string expresses that. `sun_moon.cpp` was changed to return
+numbers and a phase enum rather than formatted text, which keeps the almanac
+maths free of any dependency on the display.
+
+**What the toggle does not touch.** Bus stop names stay Chinese either way:
+they are what is written on the stop.
+
+**The settings page was nearly free.** The browser has real fonts and
+`PAGE_HEAD` has declared `<meta charset=utf-8>` since the beginning, so
+translating it is picking a different literal — an `L(en, zh)` helper returning
+a flash string. `sendPage` writes `window.__zh` into the head before `/bus.js`
+is fetched, so the route picker comes up in the same language as the form.
+
+**Cost.** App 1.32 MB → 1.47 MB of 3 MB (42% → 46%).
+
+**What this does not solve.** Live Chinese from the bus APIs is still
+unrenderable, and `remarkLabel` still matches on the operators' English field to
+pick a baked word. The vocabulary is fixed at build time; a string nobody baked
+cannot appear. That was the deal in the entry below and it has not changed —
+only the depth of the pixels has.
+
 ## 2026-08-10 — The rotation is the owner's, not the firmware's
 
 **Context.** The scene table carried both the list of scenes and each one's
@@ -32,6 +138,9 @@ actually see. A `static_assert` ties `SCENE_SLOTS` to the table length, making
 silently ignored setting.
 
 ## 2026-08-10 — Chinese is baked to 1-bit bitmaps, not an embedded font
+
+> Still current. A 4-bpp alpha variant was tried on 2026-08-24 and withdrawn
+> the same day — see that entry for why. Nothing below changed.
 
 **Context.** The bus scene shows Hong Kong stop names, destinations and status
 words in Traditional Chinese. TFT_eSPI has no CJK font at all — fonts 2/4/6/8

@@ -110,6 +110,13 @@ static const char BUS_JS[] PROGMEM = R"JS(
     });
   }
 
+  // ---- language ----------------------------------------------------------
+  // window.__zh is written into the document head by sendPage, before this
+  // script is fetched, so the picker comes up in the same language as the form
+  // around it. The operator and region labels are NOT here: they already carry
+  // both scripts ("九巴 KMB"), which is how anyone actually refers to them.
+  function T(en, zh) { return window.__zh ? zh : en; }
+
   // ---- small DOM helpers -------------------------------------------------
   function el(tag, attrs, text) {
     var e = document.createElement(tag);
@@ -181,7 +188,9 @@ static const char BUS_JS[] PROGMEM = R"JS(
   }
 
   // [w, h, packed rows] -- MSB first, each row padded to a whole byte, which is
-  // the layout TFT_eSPI::drawBitmap takes directly.
+  // the layout TFT_eSPI::drawBitmap takes directly. Must stay in step with
+  // tools/gen_zh_labels.py, which bakes the firmware's own vocabulary to the
+  // identical layout and thresholds at the same midpoint.
   function pack(img) {
     var w = img.width, h = img.height, d = img.data;
     var rowBytes = (w + 7) >> 3;
@@ -270,10 +279,10 @@ static const char BUS_JS[] PROGMEM = R"JS(
   Picker.prototype.build = function () {
     var self = this;
     this.root.textContent = '';
-    this.opSel = select(OPS, 'Choose operator…');
-    this.regSel = select(REGIONS, 'Choose region…');
+    this.opSel = select(OPS, T('Choose operator…', '選擇營辦商…'));
+    this.regSel = select(REGIONS, T('Choose region…', '選擇地區…'));
     this.regSel.style.display = 'none';
-    this.routeIn = el('input', { placeholder: 'Route number, e.g. 68X', type: 'text' });
+    this.routeIn = el('input', { placeholder: T('Route number, e.g. 68X', '路線號碼，例如 68X'), type: 'text' });
     this.routeIn.style.display = 'none';
     this.varSel = el('div');
     this.stopSel = el('div');
@@ -321,7 +330,7 @@ static const char BUS_JS[] PROGMEM = R"JS(
     ['outbound', 'inbound'].forEach(function (b) {
       for (var st = 1; st <= 4; st++) combos.push({ b: b, st: st });
     });
-    this.status('Looking up variants…');
+    this.status(T('Looking up variants…', '查詢班次中…'));
     mapLimit(combos, 6, function (c) {
       return jget(KMB + 'route/' + encodeURIComponent(route) + '/' + c.b + '/' + c.st, signal)
         .then(function (j) {
@@ -330,14 +339,14 @@ static const char BUS_JS[] PROGMEM = R"JS(
         }, function () { return null; });
     }).then(function (rs) {
       var found = rs.filter(Boolean);
-      if (!found.length) { self.status('No such route.'); return; }
+      if (!found.length) { self.status(T('No such route.', '沒有這條路線。')); return; }
       self.status(found.length + ' variant(s)');
       // Labelled by destination first, then origin: 68X has four variants and
       // two of them share a destination, so origin is what tells them apart.
       var opts = found.map(function (f, n) {
         return { v: n, label: dirLabel(f.d.orig_tc, f.d.dest_tc) };
       });
-      var s = select(opts, 'Choose direction / variant…');
+      var s = select(opts, T('Choose direction / variant…', '選擇方向 / 班次…'));
       s.onchange = function () {
         if (s.value === '') return;
         var f = found[parseInt(s.value, 10)];
@@ -351,7 +360,7 @@ static const char BUS_JS[] PROGMEM = R"JS(
   Picker.prototype.kmbStops = function (op, route, f) {
     var self = this, signal = this.abort();
     this.stopSel.textContent = '';
-    this.status('Loading stops…');
+    this.status(T('Loading stops…', '載入車站中…'));
     jget(KMB + 'route-stop/' + encodeURIComponent(route) + '/' + f.b + '/' + f.st, signal)
       .then(function (j) {
         // seq is a String in this endpoint and a Number in the ETA response.
@@ -374,22 +383,22 @@ static const char BUS_JS[] PROGMEM = R"JS(
           };
         });
       })
-      .catch(function (e) { if (e.name !== 'AbortError') self.status('Lookup failed.'); });
+      .catch(function (e) { if (e.name !== 'AbortError') self.status(T('Lookup failed.', '查詢失敗。')); });
   };
 
   // --- Citybus
   Picker.prototype.ctbDirections = function (route) {
     var self = this, signal = this.abort();
-    this.status('Looking up route…');
+    this.status(T('Looking up route…', '查詢路線中…'));
     jget(CTB + 'route/CTB/' + encodeURIComponent(route), signal).then(function (j) {
       var d = j && j.data;
-      if (!d || !d.route) { self.status('No such route.'); return; }
+      if (!d || !d.route) { self.status(T('No such route.', '沒有這條路線。')); return; }
       self.status('');
       var opts = [
         { v: 'outbound', label: dirLabel(d.orig_tc, d.dest_tc) },
         { v: 'inbound',  label: dirLabel(d.dest_tc, d.orig_tc) }
       ];
-      var s = select(opts, 'Choose direction…');
+      var s = select(opts, T('Choose direction…', '選擇方向…'));
       s.onchange = function () {
         if (s.value === '') return;
         var out = s.value === 'outbound';
@@ -397,13 +406,13 @@ static const char BUS_JS[] PROGMEM = R"JS(
       };
       self.varSel.textContent = '';
       self.varSel.appendChild(s);
-    }, function () { self.status('Lookup failed.'); });
+    }, function () { self.status(T('Lookup failed.', '查詢失敗。')); });
   };
 
   Picker.prototype.ctbStops = function (route, dirWord, destTc, destEn) {
     var self = this, signal = this.abort();
     this.stopSel.textContent = '';
-    this.status('Loading stops…');
+    this.status(T('Loading stops…', '載入車站中…'));
     jget(CTB + 'route-stop/CTB/' + encodeURIComponent(route) + '/' + dirWord, signal)
       .then(function (j) {
         var rows = (j.data || []).slice().sort(function (a, b) { return a.seq - b.seq; });
@@ -423,7 +432,7 @@ static const char BUS_JS[] PROGMEM = R"JS(
           };
         });
       })
-      .catch(function (e) { if (e.name !== 'AbortError') self.status('Lookup failed.'); });
+      .catch(function (e) { if (e.name !== 'AbortError') self.status(T('Lookup failed.', '查詢失敗。')); });
   };
 
   // --- Green minibus
@@ -433,11 +442,11 @@ static const char BUS_JS[] PROGMEM = R"JS(
   Picker.prototype.gmbRoutes = function (route) {
     var self = this, signal = this.abort();
     var region = this.regSel.value;
-    if (!region) { this.status('Choose a region first.'); return; }
-    this.status('Looking up route…');
+    if (!region) { this.status(T('Choose a region first.', '請先選擇地區。')); return; }
+    this.status(T('Looking up route…', '查詢路線中…'));
     jget(GMB + 'route/' + region + '/' + encodeURIComponent(route), signal).then(function (j) {
       var rs = (j && j.data) || [];
-      if (!rs.length) { self.status('No such route in that region.'); return; }
+      if (!rs.length) { self.status(T('No such route in that region.', '該地區沒有這條路線。')); return; }
       var opts = [], flat = [];
       rs.forEach(function (r) {
         (r.directions || []).forEach(function (dir) {
@@ -450,7 +459,7 @@ static const char BUS_JS[] PROGMEM = R"JS(
         });
       });
       self.status('');
-      var s = select(opts, 'Choose direction…');
+      var s = select(opts, T('Choose direction…', '選擇方向…'));
       s.onchange = function () {
         if (s.value === '') return;
         var f = flat[parseInt(s.value, 10)];
@@ -458,13 +467,13 @@ static const char BUS_JS[] PROGMEM = R"JS(
       };
       self.varSel.textContent = '';
       self.varSel.appendChild(s);
-    }, function () { self.status('Lookup failed.'); });
+    }, function () { self.status(T('Lookup failed.', '查詢失敗。')); });
   };
 
   Picker.prototype.gmbStops = function (route, f) {
     var self = this, signal = this.abort();
     this.stopSel.textContent = '';
-    this.status('Loading stops…');
+    this.status(T('Loading stops…', '載入車站中…'));
     // This endpoint carries name_tc directly, so unlike KMB and Citybus there
     // is no per-stop resolution step at all.
     jget(GMB + 'route-stop/' + f.r.route_id + '/' + f.dir.route_seq, signal)
@@ -483,14 +492,14 @@ static const char BUS_JS[] PROGMEM = R"JS(
           };
         });
       })
-      .catch(function (e) { if (e.name !== 'AbortError') self.status('Lookup failed.'); });
+      .catch(function (e) { if (e.name !== 'AbortError') self.status(T('Lookup failed.', '查詢失敗。')); });
   };
 
   // --- shared stop list + commit
   Picker.prototype.showStops = function (stops, toStop) {
     var self = this;
     var opts = stops.map(function (s, n) { return { v: n, label: s.seq + '. ' + s.tc }; });
-    var sel = select(opts, 'Choose stop…');
+    var sel = select(opts, T('Choose stop…', '選擇車站…'));
     sel.onchange = function () {
       if (sel.value === '') return;
       self.choose(toStop(stops[parseInt(sel.value, 10)]));
@@ -516,13 +525,14 @@ static const char BUS_JS[] PROGMEM = R"JS(
     stopIn.value = o.stopTc;
     destIn.value = o.destTc;
 
-    this.prev.appendChild(el('label', null, 'Stop name on the display'));
+    this.prev.appendChild(el('label', null, T('Stop name on the display', '螢幕上的站名')));
     this.prev.appendChild(stopIn);
-    this.prev.appendChild(el('label', null, 'Destination on the display'));
+    this.prev.appendChild(el('label', null, T('Destination on the display', '螢幕上的目的地')));
     this.prev.appendChild(destIn);
     this.prev.appendChild(el('div', { 'class': 'hint' },
-      'Exactly as the panel will draw it — 1-bit, at the real size. Shorten a '
-      + 'name if it renders too small to read from where the clock hangs.'));
+      T('Exactly as the panel will draw it, at the real size. Shorten a name '
+        + 'if it renders too small to read from where the clock hangs.',
+        '這就是螢幕上的實際大小和樣子。如果太小、在時鐘掛著的位置看不清楚，請縮短站名。')));
     var box = el('div');
     this.prev.appendChild(box);
 
@@ -550,19 +560,52 @@ static const char BUS_JS[] PROGMEM = R"JS(
   var pickers = [];
   for (var i = 0; document.getElementById('bpick' + i); i++) pickers.push(new Picker(i));
 
+  // The Chinese text for one slot, wherever it happens to live: the picker if
+  // the user drilled a route in this page session, otherwise the packed value
+  // in the manual-entry field, which is where a slot configured on a previous
+  // visit -- or typed in by hand -- keeps it.
+  //
+  // Field order is busStop_pack() in settings.h:
+  //   0 op | 1 route | 2 stop | 3 serviceType | 4 dir | 5 routeId |
+  //   6 routeSeq | 7 stopSeq | 8 stopTC | 9 stopEN | 10 destTC | 11 destEN
+  function slotText(p) {
+    if (p.chosen) return { s: p.chosen.stopTc || '', d: p.chosen.destTc || '' };
+    var input = document.getElementById('bus' + p.i);
+    var f = (input && input.value ? input.value : '').split('|');
+    return { s: f[8] || '', d: f[10] || '' };
+  }
+
   // Bake and upload before the form navigates away -- the device restarts
   // moments after /save, so there is no "after".
+  //
+  // EVERY slot with Chinese text is baked, not just the ones re-picked here.
+  // Only baking the re-picked ones meant a stop added through "Manual entry"
+  // never got a bitmap at all, and a slot whose bitmap was lost -- an erased
+  // filesystem, a failed upload, a format change -- could not be recovered
+  // without drilling the whole route down again, because a plain Save uploaded
+  // nothing. The panel would sit there in English with no way to say why.
+  // Re-baking unconditionally also fixes the case where the text was hand-edited
+  // and the old bitmap is now the wrong words.
   var form = document.querySelector('form[action="/save"]');
   if (form) {
     form.addEventListener('submit', function (ev) {
-      var pending = pickers.filter(function (p) { return p.chosen; });
-      if (!pending.length) return;               // nothing rebaked; save as-is
+      var jobs = [];
+      pickers.forEach(function (p) {
+        var t = slotText(p);
+        if (t.s) jobs.push({ slot: p.i, which: 's', text: t.s });
+        if (t.d) jobs.push({ slot: p.i, which: 'd', text: t.d });
+      });
+      if (!jobs.length) return;                  // nothing to bake; save as-is
       ev.preventDefault();
-      Promise.all(pending.map(function (p) {
-        return Promise.all([upload(p.i, 's', p.chosen.stopTc),
-                            upload(p.i, 'd', p.chosen.destTc)]);
-      })).then(function () { form.submit(); },
-               function () { form.submit(); });  // save the ids even if baking
+
+      // Two at a time rather than all eight: each upload in flight is a decode
+      // buffer on a device with 4 MB of flash and not much heap. mapLimit is the
+      // same helper the stop lookups use. form.submit() does not re-fire this
+      // handler, so there is no loop.
+      var go = function () { form.submit(); };
+      mapLimit(jobs, 2, function (j) {
+        return upload(j.slot, j.which, j.text);
+      }).then(go, go);                           // save the ids even if baking
     });                                          // failed; English still shows
   }
 
@@ -577,8 +620,11 @@ static const char BUS_JS[] PROGMEM = R"JS(
   if (!note) return;
 
   jget(GMB + 'route/HKI/1').then(function () {
-    note.textContent = 'Pick a route below, or type the packed value under "Manual entry".';
+    note.textContent = T('Pick a route below, or type the packed value under "Manual entry".',
+                         '在下面選擇路線，或在「手動輸入」中填入封裝字串。');
   }, function () {
+    // Bilingual regardless of the setting: this is the one message someone sees
+    // when they are stuck in the setup portal, and it is worth saying twice.
     note.innerHTML = '路線查詢需要互聯網 &mdash; ' +
       'route lookup needs internet access, and this device’s setup network ' +
       'has none. <b>Saved stops are kept</b>: you can save now and add stops ' +

@@ -1,23 +1,42 @@
 # ---------------------------------------------------------------------------
 # Credentials -- NEVER commit these.
 # ---------------------------------------------------------------------------
-# config.h holds the real WiFi password. `config/config.h` is the canonical
-# copy you edit; the others are generated into each sketch folder by
-# tools/sync_shared.sh and are pure build artifacts. Ignore every one of them,
-# and keep only the placeholder template in git.
+# There is no config.h any more (see tools/sync_shared.sh): WiFi, location,
+# timezone and units are entered on the setup web page and stored in NVS. This
+# rule stays as a tripwire -- if a credentials header is ever reintroduced,
+# under any sketch folder, it must not reach a public repo by accident.
 config.h
-!config/config.example.h
 
 # ---------------------------------------------------------------------------
 # Build output
 # ---------------------------------------------------------------------------
 build/
-*.bin
 *.elf
 *.map
+
+# Firmware images. arduino-cli --export-binaries drops app.ino.bin,
+# app.ino.merged.bin, app.ino.bootloader.bin and app.ino.partitions.bin into
+# app/build/, and release/ holds the 4 MB merged images we hand to users.
+# Those are published as GitHub Release assets, not carried in the tree --
+# release/SHA256SUMS is the tracked record of what was published.
+#
+# No .bin is committed anywhere in this tree, without exception.
+*.bin
+
+# ---------------------------------------------------------------------------
+# Python bytecode from the tools/ generators
+# ---------------------------------------------------------------------------
+__pycache__/
+*.pyc
 
 # ---------------------------------------------------------------------------
 # OS / editor noise
 # ---------------------------------------------------------------------------
 .DS_Store
+._*
+.AppleDouble
+Thumbs.db
+.vscode/
+.idea/
 *.swp
+*~

@@ -1,6 +1,7 @@
 #include "calibrate.h"
 #include "touch.h"
 #include "theme.h"
+#include "uitext.h"
 #include <math.h>
 
 static const int TARGET_INSET   = 25;    // px from each edge to a target centre
@@ -16,17 +17,14 @@ static void drawTarget(int x, int y, uint16_t colour) {
   tft.drawFastVLine(x, y - 16, 33, colour);
 }
 
-static void message(const char* line1, const char* line2, uint16_t colour) {
+// A headline, and optionally a quieter line under it. T_COUNT stands in for
+// "no second line" -- there is no id for absence and inventing one would put a
+// blank row in the string table.
+static void message(UiText line1, UiText line2, uint16_t colour) {
   tft.fillScreen(COL_BG);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(colour, COL_BG);
-  tft.setTextFont(4);
-  tft.drawString(line1, SCREEN_W / 2, SCREEN_H / 2 - 14);
-  if (line2) {
-    tft.setTextColor(COL_DIM, COL_BG);
-    tft.setTextFont(2);
-    tft.drawString(line2, SCREEN_W / 2, SCREEN_H / 2 + 18);
-  }
+  ui_draw(line1, SCREEN_W / 2, SCREEN_H / 2 - 14, LBL_CENTRE, colour, COL_BG);
+  if (line2 != T_COUNT)
+    ui_draw(line2, SCREEN_W / 2, SCREEN_H / 2 + 18, LBL_CENTRE, COL_DIM, COL_BG);
 }
 
 // Average a burst of samples from one steady press. Bails out if the finger
@@ -68,21 +66,19 @@ static bool collectCorners(TouchCal& out) {
   const int yT = TARGET_INSET, yB = SCREEN_H - 1 - TARGET_INSET;
   const int tx[4] = {xL, xR, xR, xL};                 // TL, TR, BR, BL
   const int ty[4] = {yT, yT, yB, yB};
-  const char* names[4] = {"top left", "top right", "bottom right", "bottom left"};
+  const UiText names[4] = { T_CAL_TL, T_CAL_TR, T_CAL_BR, T_CAL_BL };
   long rx[4], ry[4];
 
   for (int i = 0; i < 4; i++) {
     tft.fillScreen(COL_BG);
     drawTarget(tx[i], ty[i], COL_ACCENT);
-    tft.setTextDatum(MC_DATUM);
-    tft.setTextColor(COL_TEXT, COL_BG);
-    tft.setTextFont(4);
-    tft.drawString(names[i], SCREEN_W / 2, SCREEN_H / 2 - 12);
-    tft.setTextColor(COL_DIM, COL_BG);
-    tft.setTextFont(2);
-    tft.drawString("press firmly and hold", SCREEN_W / 2, SCREEN_H / 2 + 16);
+    ui_draw(names[i], SCREEN_W / 2, SCREEN_H / 2 - 12, LBL_CENTRE, COL_TEXT, COL_BG);
+    ui_draw(T_CAL_HOLD, SCREEN_W / 2, SCREEN_H / 2 + 16, LBL_CENTRE, COL_DIM, COL_BG);
 
-    Serial.printf("calibrate: target %d/4 (%s) at %d,%d\n", i + 1, names[i], tx[i], ty[i]);
+    // ui_en, not ui_draw: the serial trace is for whoever is reading the log,
+    // and a log that changes language with a display setting is a worse log.
+    Serial.printf("calibrate: target %d/4 (%s) at %d,%d\n",
+                  i + 1, ui_en(names[i]), tx[i], ty[i]);
     if (!readStablePress(rx[i], ry[i])) {
       Serial.println("calibrate: timed out waiting for a press");
       return false;
@@ -128,10 +124,7 @@ static bool confirmTap(int& errPx) {
   const int cx = SCREEN_W / 2, cy = SCREEN_H / 2;
   tft.fillScreen(COL_BG);
   drawTarget(cx, cy, COL_ACCENT);
-  tft.setTextDatum(MC_DATUM);
-  tft.setTextColor(COL_TEXT, COL_BG);
-  tft.setTextFont(2);
-  tft.drawString("tap the centre to confirm", SCREEN_W / 2, SCREEN_H - 30);
+  ui_draw(T_CAL_CONFIRM, SCREEN_W / 2, SCREEN_H - 30, LBL_CENTRE, COL_TEXT, COL_BG);
 
   long rx, ry;
   if (!readStablePress(rx, ry)) return false;
@@ -150,7 +143,7 @@ bool calibrate_run(bool persist) {
 
   const TouchCal previous = touch_calibration();
 
-  message("Touch setup", "press each target, firmly", COL_TEXT);
+  message(T_CAL_TITLE, T_CAL_PRESS_EACH, COL_TEXT);
   delay(1200);
 
   // Set the press gate from the panel's own idle noise, measured now rather
@@ -165,7 +158,7 @@ bool calibrate_run(bool persist) {
     if (!collectCorners(c)) {
       // Timeout or nonsense presses. On timeout there is nobody there, so stop
       // rather than loop forever in front of an empty room.
-      message("Touch setup skipped", "using previous calibration", COL_FRESH_WARN);
+      message(T_CAL_SKIPPED, T_CAL_KEEPING, COL_FRESH_WARN);
       Serial.println("calibrate: aborted, keeping previous calibration");
       delay(1500);
       return false;
@@ -181,21 +174,28 @@ bool calibrate_run(bool persist) {
       Serial.println("calibrate: equivalent constants, if you ever want them baked in:");
       Serial.printf("  TOUCH_SWAP_XY %d / X %ld..%ld / Y %ld..%ld / Z %d\n",
                     c.swapXY, c.xAt0, c.xAtW, c.yAt0, c.yAtH, c.zThreshold);
-      message("Touch calibrated", nullptr, COL_FRESH_OK);
+      message(T_CAL_DONE, T_COUNT, COL_FRESH_OK);
       delay(900);
       return true;
     }
 
     if (attempt < MAX_ATTEMPTS) {
-      char buf[48];
-      snprintf(buf, sizeof(buf), "off by %d px - try again", errPx);
-      message("Not quite", buf, COL_FRESH_WARN);
+      // "off by 12 px - try again" / 偏離 12 像素，請再試 -- the number sits in
+      // the middle either way, so the second line is a run rather than a label.
+      char px[8];
+      snprintf(px, sizeof(px), "%d ", errPx);
+      tft.fillScreen(COL_BG);
+      ui_draw(T_CAL_NOT_QUITE, SCREEN_W / 2, SCREEN_H / 2 - 14,
+              LBL_CENTRE, COL_FRESH_WARN, COL_BG);
+      UiRun off;
+      off.text(px, UI_FONT_S).label(T_CAL_OFF_BY);
+      off.draw(SCREEN_W / 2, SCREEN_H / 2 + 18, LBL_CENTRE, COL_DIM, COL_BG);
       delay(1500);
     } else {
       // Out of attempts. Keep the last mapping anyway: approximate touch beats
       // none, and the user can retry any time with a long press.
       touch_setCalibration(c, persist);
-      message("Saved (rough)", "hold 4s any time to redo", COL_FRESH_WARN);
+      message(T_CAL_ROUGH, T_CAL_REDO, COL_FRESH_WARN);
       Serial.println("calibrate: confirmation never passed; saved the last attempt anyway");
       delay(1800);
       return true;
