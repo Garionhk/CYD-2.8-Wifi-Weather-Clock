@@ -9,6 +9,10 @@
 // (ILI9341_2, TFT_INVERSION_ON, USE_HSPI_PORT, 55 MHz -- docs/stage0_results.md).
 // Display on HSPI, touch on VSPI: separate buses, verified together in 0.2e.
 //
+// Colour inversion is the one display fact that is NOT settled at compile time:
+// boards under this part number ship with either polarity, so User_Setup.h sets
+// the default and Settings::invert overrides it below.
+//
 // Touch calibration is measured on the device and kept in NVS, so it is not a
 // firmware constant. See touch.h for why.
 
@@ -142,9 +146,21 @@ void setup() {
   Serial.println("\n=== CYD clock & weather station ===");
   cydPrintBanner();
 
+  // Settings before the first pixel. Two of them describe how the panel is to
+  // be driven at all -- the colour inversion applied a few lines down, and the
+  // language every message from here on is printed in -- and the calibration
+  // wizard that may run in a moment is already one of those messages. Nothing
+  // in settings_begin touches the display, so reading NVS this early is free.
+  settings_begin();
+
   cydRgbLedOff();          // active LOW: powers up white and washes out the panel
   tft.init();
   tft.setRotation(CYD_ROTATION);
+  // init() has just applied User_Setup.h's compile-time polarity; this is the
+  // stored override on top of it. A panel wired the other way round is put
+  // right here, without rebuilding anything. Panel-level and sticky, so once is
+  // enough -- the clock's sprite inherits it without knowing it exists.
+  tft.invertDisplay(g_settings.invert);
   tft.fillScreen(COL_BG);
   cydBacklightOn();        // after init, so there's no flash of power-up garbage
 
@@ -152,8 +168,6 @@ void setup() {
   // the wizard in front of the user now, not after a 15 s network wait.
   touch_begin();
   if (!touch_hasStoredCalibration()) calibrate_run(true);
-
-  settings_begin();
 
   // Before the setup portal, not after: the portal's /label endpoint writes
   // here, so a first-time user configuring a bus stop needs the filesystem

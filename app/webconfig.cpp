@@ -289,6 +289,39 @@ static void sendPage(const String& error = String()) {
   h += zh ? F(" checked>") : F(">");
   h += F("中文 (繁體)</label></div></fieldset>");
 
+  // --- Display colours
+  //
+  // Not a build-time constant, because boards sold under the one part number do
+  // not all drive the panel with the same polarity, and the person holding the
+  // other one flashed a published .bin and cannot rebuild it.
+  //
+  // Deliberately outside the apMode check that hides the bus section: someone
+  // with the opposite panel has wrong colours on the very first screen they
+  // ever see, so the fix has to be reachable from the setup portal, before the
+  // device has joined any network.
+  //
+  // The options name what the user is LOOKING AT, not what the register does.
+  // "Inversion on/off" is meaningless to somebody who has no idea which way
+  // their board is wired; "my colours are wrong" is a question they can answer.
+  const bool inv = field("invert", String(g_settings.invert ? 1 : 0)).toInt() != 0;
+  h += F("<fieldset><legend>");
+  h += L(F("Display colours"), F("顯示顏色"));
+  h += F("</legend><div class=radio><label><input type=radio name=invert value=1");
+  h += inv ? F(" checked>") : F(">");
+  h += L(F("Normal"), F("正常"));
+  h += F("</label><label><input type=radio name=invert value=0");
+  h += inv ? F(">") : F(" checked>");
+  h += L(F("My colours are inverted &mdash; fix them"), F("顏色反相 &mdash; 請修正"));
+  h += F("</label></div><div class=hint>");
+  h += L(F("If red shows as cyan, green as magenta and blue as yellow, your "
+           "panel's controller wants the opposite polarity to the usual one. "
+           "Pick the second option. Nothing but the panel is affected, and the "
+           "clock restarts into the change so you can see it straight away."),
+         F("如果紅色顯示為青色、綠色顯示為洋紅、藍色顯示為黃色，"
+           "代表你的螢幕控制器與一般的極性相反，請選擇第二項。"
+           "這只影響螢幕顯示，儲存後時鐘會重新啟動，可即時看到效果。"));
+  h += F("</div></fieldset>");
+
   // --- Scenes
   //
   // Which screens appear, and for how long. Both belong to the owner: somebody
@@ -553,6 +586,13 @@ static void handleSave() {
                            ? UNITS_IMPERIAL : UNITS_METRIC;
   g_settings.lang      = (server.arg("lang").toInt() == LANG_ZH)
                            ? LANG_ZH : LANG_EN;
+  // Absent means "not on this form" and leaves the panel alone, the same rule
+  // the bus slots use. A bare toInt() would read a missing field as 0 and turn
+  // inversion OFF -- so a POST from a stale or cut-down form could invert a
+  // working panel, and the address of the page that undoes it is painted on
+  // that panel. Cheap to guard, unpleasant to hit.
+  if (server.hasArg("invert"))
+    g_settings.invert  = (server.arg("invert").toInt() != 0);
   settings_save();
   saved = true;
 

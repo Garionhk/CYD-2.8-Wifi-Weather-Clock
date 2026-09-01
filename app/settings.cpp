@@ -172,6 +172,10 @@ void settings_begin() {
     g_settings.tz        = prefs.getString("tz",    g_settings.tz);
     g_settings.units     = prefs.getUChar ("units", g_settings.units);
     g_settings.lang      = prefs.getUChar ("lang",  g_settings.lang);
+    // Absent on a device provisioned before this setting existed, and
+    // getBool then hands back CYD_TFT_INVERT -- exactly the behaviour that
+    // firmware had. An upgrade cannot turn a working panel inside out.
+    g_settings.invert    = prefs.getBool  ("invert", g_settings.invert);
 
     // No migration needed for devices provisioned before the bus scene existed:
     // the key simply isn't there, getString returns the default "", and
@@ -190,13 +194,14 @@ void settings_begin() {
   // The SSID is printed because a router broadcasts it anyway and "connected to
   // the wrong network" is otherwise painful to diagnose. The password never is:
   // serial logs end up pasted into issue reports.
-  Serial.printf("settings: %s  ssid \"%s\"  %.4f,%.4f  tz %s  %s  %s\n",
+  Serial.printf("settings: %s  ssid \"%s\"  %.4f,%.4f  tz %s  %s  %s  invert %s\n",
                 g_settings.provisioned ? "loaded" : "UNPROVISIONED (defaults)",
                 g_settings.wifiSsid.c_str(),
                 g_settings.latitude, g_settings.longitude,
                 g_settings.tz.c_str(),
                 g_settings.units == UNITS_IMPERIAL ? "imperial" : "metric",
-                g_settings.lang == LANG_ZH ? "zh" : "en");
+                g_settings.lang == LANG_ZH ? "zh" : "en",
+                g_settings.invert ? "on" : "off");
 
   for (int i = 0; i < BUS_SLOTS; i++)
     Serial.printf("settings: bus%d %s\n", i, busStop_describe(g_settings.buses[i]).c_str());
@@ -214,6 +219,7 @@ bool settings_save() {
   prefs.putString("tz",    g_settings.tz);
   prefs.putUChar ("units", g_settings.units);
   prefs.putUChar ("lang",  g_settings.lang);
+  prefs.putBool  ("invert", g_settings.invert);
   for (int i = 0; i < BUS_SLOTS; i++) {
     char key[8];
     snprintf(key, sizeof(key), "bus%d", i);

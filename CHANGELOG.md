@@ -2,6 +2,39 @@
 
 ## Unreleased
 
+### Added
+
+- **A display colour setting: Normal, or "My colours are inverted".** Boards
+  sold as ESP32-2432S028R do not all drive the panel with the same inversion
+  polarity — same chip, same silkscreen, same pin map, opposite controller. On
+  one of the other ones every colour came out as its exact complement
+  (red→cyan, green→magenta, blue→yellow), and the only remedy was to edit
+  `CYD_TFT_INVERT` in `config/board.h` and rebuild, which is not something you
+  can ask of somebody who flashed a published `.bin`.
+  - `CYD_TFT_INVERT` remains the default, so a board that was already correct is
+    unaffected and upgrading cannot turn a working panel inside out. A device
+    provisioned before this setting existed has no stored value, and the default
+    is what it gets.
+  - The toggle is in the **setup portal** as well as the settings page. It has
+    to be: someone holding the other panel has wrong colours on the first screen
+    they ever see, before the device has joined any network.
+  - The options name what the user is looking at rather than what the register
+    does. "Inversion on/off" is unanswerable for somebody who does not know how
+    their board is wired; "my colours are inverted" is not.
+
+### Changed
+
+- **`settings_begin()` now runs before `tft.init()`.** Colour inversion is a
+  setting, and it has to be known before the first pixel — including the pixels
+  of the touch calibration wizard, which on a new device runs before anything
+  else. Nothing in `settings_begin()` touches the display. A side effect is that
+  boot-time calibration is now drawn in the saved language rather than always in
+  English.
+- Restored the executable bit on `tools/build_all.sh`, `tools/flash.sh` and
+  `tools/sync_shared.sh`. All three are documented as `./tools/...` and none of
+  them would run from a fresh clone.
+
+
 ## v2.2.0 — English or 繁體中文, and text that stopped being jagged — 2026-08-24
 
 Adds a language setting that covers every surface the device has — all five

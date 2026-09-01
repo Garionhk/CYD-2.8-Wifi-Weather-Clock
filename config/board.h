@@ -44,10 +44,18 @@
   // Backlight. Active HIGH through a transistor; the panel is DARK until this
   // is driven, which reads as a dead board if you forget it.
   #define CYD_TFT_BL_PIN 21
-  // Colour inversion. CONFIRMED in Stage 0.1 on this unit: without it every
-  // colour came back as its exact complement (red->cyan, green->magenta,
-  // blue->yellow). Recorded here so the app and the User_Setup.h template
-  // can't drift apart -- s01 cross-checks the two.
+  // Colour inversion -- the BOOT DEFAULT only, not the last word. CONFIRMED in
+  // Stage 0.1 on this unit: without it every colour came back as its exact
+  // complement (red->cyan, green->magenta, blue->yellow). Recorded here so the
+  // app and the User_Setup.h template can't drift apart -- s01 cross-checks it.
+  //
+  // Panels sold under this one part number are NOT all wired alike: the same
+  // ESP32, the same silkscreen, and a controller that wants the opposite
+  // polarity. So this is only what an unprovisioned device comes up with; the
+  // stored value in Settings::invert wins from there, and the settings page can
+  // flip it without a re-flash. Someone whose board is the other way round can
+  // fix it themselves -- which is the whole point, since they cannot rebuild
+  // firmware to change a #define.
   #define CYD_TFT_INVERT 1
   // Landscape rotation. CONFIRMED in Stage 0.1: 1 is the right way up on this
   // board (3 is the same 320x240 view, 180 deg over).
@@ -57,7 +65,7 @@
 
   #define CYD_BOARD_NAME "ESP32-2432S024R (2.4\", micro-USB)"
   #define CYD_TFT_BL_PIN 27
-  #define CYD_TFT_INVERT 1        // confirmed in Stage 0.1 on that unit
+  #define CYD_TFT_INVERT 1        // boot default; Settings::invert overrides
   #define CYD_ROTATION 3          // that unit read the right way up at 3
 
 #else

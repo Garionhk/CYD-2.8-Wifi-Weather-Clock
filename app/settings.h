@@ -15,6 +15,8 @@
 
 #include <Arduino.h>
 
+#include "board.h"   // CYD_TFT_INVERT -- the boot default for Settings::invert
+
 static const uint8_t UNITS_METRIC   = 0;   // C, km/h, hPa
 static const uint8_t UNITS_IMPERIAL = 1;   // F, mph, inHg
 
@@ -28,6 +30,28 @@ static const uint8_t UNITS_IMPERIAL = 1;   // F, mph, inHg
 // those are the names written on the actual bus stop.
 static const uint8_t LANG_EN = 0;          // English
 static const uint8_t LANG_ZH = 1;          // Traditional Chinese
+
+// ---------------------------------------------------------------------------
+// Panel colour inversion
+// ---------------------------------------------------------------------------
+// Whether the controller is told to invert every colour it displays. It has to
+// be a setting rather than the #define it used to be, because boards sold as
+// ESP32-2432S028R do not all agree: same chip, same silkscreen, same pin map,
+// and a panel whose controller wants the opposite polarity. On one of those the
+// firmware was unusable and unfixable -- every colour came out as its exact
+// complement (red->cyan, green->magenta, blue->yellow) and the only remedy was
+// to edit board.h and rebuild, which is not something you can ask of someone
+// who flashed a published .bin.
+//
+// CYD_TFT_INVERT stays the default, so nothing changes for a board that was
+// already right. What is new is that being wrong is now recoverable from the
+// settings page, and recoverable on the setup portal too -- the toggle is in
+// the form an unprovisioned device serves, since a first-time user with the
+// other panel has wrong colours from the very first screen.
+//
+// Applied once, straight after tft.init(), because inversion is a mode the
+// panel holds. Sprites inherit it for free: it is the controller inverting on
+// the way out, not anything the drawing code does.
 
 // ---------------------------------------------------------------------------
 // Hong Kong bus / minibus stops (bus scene)
@@ -129,6 +153,7 @@ struct Settings {
   String  tz          = "UTC0";        // POSIX TZ string, not an IANA name
   uint8_t units       = UNITS_METRIC;
   uint8_t lang        = LANG_EN;
+  bool    invert      = CYD_TFT_INVERT;   // panel colour inversion
   bool    provisioned = false;         // false until the user has saved once
   BusStop buses[BUS_SLOTS];            // all unset by default -- see valid()
 

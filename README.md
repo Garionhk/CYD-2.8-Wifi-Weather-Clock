@@ -119,8 +119,8 @@ the slow speed as the fallback rather than the default.
 ## Configuration
 
 **Nothing is configured at compile time.** There is no `config.h` — WiFi,
-location, timezone, units, bus stops, and which screens appear and for how long
-are set from a web page and stored in the ESP32's NVS flash, alongside the touch
+location, timezone, units, language, display colours, bus stops, and which
+screens appear and for how long are set from a web page and stored in the ESP32's NVS flash, alongside the touch
 calibration and for the same reason: re-flashing to change a setting is a poor
 repair path for something hanging on a wall.
 
@@ -242,13 +242,35 @@ Metric (°C, km/h, hPa) or imperial (°F, mph, inHg), as a pair — there is no
 per-field choice. Display only: `AppData` always stores metric and `units.h`
 converts at draw time, so switching never touches stored or fetched data.
 
+### Display colours
+
+**Normal**, or **My colours are inverted — fix them**. Pick the second one if
+red shows as cyan, green as magenta and blue as yellow.
+
+This exists because boards are not consistent. Two units with the same
+`ESP32-2432S028R` silkscreen, the same ESP32 and the same pin map can carry
+panel controllers that want opposite inversion polarity. It used to be the
+`CYD_TFT_INVERT` constant in `config/board.h`, which was fine while the only
+boards in play were the two on the author's desk and hopeless for anyone who
+flashed a published `.bin` — the fix required rebuilding the firmware.
+
+`CYD_TFT_INVERT` is still the default, so a board that was already correct is
+unaffected and an upgrade cannot turn a working panel inside out. The setting
+only overrides it.
+
+The toggle appears in the setup portal as well as the normal settings page,
+which it has to: someone with the opposite panel has wrong colours on the first
+screen they ever see, before the device has joined any network. It is applied
+once at boot, straight after `tft.init()` — inversion is a mode the controller
+holds, so the clock's digit sprite inherits it without knowing it exists.
+
 ### What is stored, and where
 
 Two NVS namespaces, plus a filesystem partition:
 
 | Where | Holds | Set by |
 |---|---|---|
-| NVS `cydcfg` | WiFi credentials, latitude/longitude, timezone, units, the four bus stops, which screens are on and their dwell times | the settings page |
+| NVS `cydcfg` | WiFi credentials, latitude/longitude, timezone, units, language, display inversion, the four bus stops, which screens are on and their dwell times | the settings page |
 | NVS `cydtouch` | touch calibration | the on-device wizard |
 | LittleFS `/l/` | the baked Chinese stop-name images | your browser, via the settings page |
 
@@ -584,8 +606,12 @@ an all-zeros document — buffer with `getString()` first.
 sketch that never calls `cydBacklightOn()` looks like a dead board.
 
 **Colours are the exact complement of what you expect** (red→cyan,
-green→magenta, blue→yellow) — that's inversion, toggle `TFT_INVERSION_ON`. If
-only red and blue swap while green stays green, that's RGB order instead.
+green→magenta, blue→yellow) — that's inversion, and you do **not** need to
+rebuild anything. Open the settings page, set **Display colours** to *My colours
+are inverted*, and save. Boards sold under the same part number ship with either
+polarity, so this is a setting rather than a build flag — see
+[Display colours](#display-colours). If only red and blue swap while green stays
+green, that's RGB order instead, which is still a `User_Setup.h` change.
 
 **Touch reads a constant 0.** Check `USE_HSPI_PORT` is defined — without it the
 display takes the bus touch needs. If it is defined and touch is still dead, the
