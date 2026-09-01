@@ -454,7 +454,7 @@ Measured, not assumed — two of these contradict the usual advice:
 |---|---|---|
 | Backlight | GPIO 27 | **GPIO 21** |
 | Rotation (right way up) | 3 | **1** |
-| Colour inversion | `TFT_INVERSION_ON` | `TFT_INVERSION_ON` — *same*, though the 2.8" is usually documented as needing it off |
+| Colour inversion | `TFT_INVERSION_ON` | `TFT_INVERSION_ON` — *same*, though the 2.8" is usually documented as needing it off. Both are only the boot default now; see [Display colours](#display-colours) |
 | Touch | controller data line dead (hardware fault) | fully working |
 
 Everything else — TFT pins, touch pins, SD, LDR, RGB LED, speaker — is identical

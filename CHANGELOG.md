@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+## v2.2.1 — a display setting for the boards wired the other way — 2026-08-31
+
+Boards sold as ESP32-2432S028R do not all drive the panel with the same colour
+polarity. On one of the other ones every colour comes out as its exact
+complement — red as cyan, green as magenta, blue as yellow — and until now the
+only remedy was to edit `CYD_TFT_INVERT` in `config/board.h` and rebuild, which
+is not something you can ask of somebody who flashed a published `.bin`.
+
+It is a setting now, on the settings page and on the setup portal both.
+
+Flashing `cyd-clock-weather-v2.2.1-4mb.bin` at `0x0` is a **factory reset** — it
+erases stored settings and touch calibration along with everything else. To
+update an existing device and keep them, upload the application only with
+`./tools/flash.sh app`. See `flash.md`.
+
 ### Added
 
 - **A display colour setting: Normal, or "My colours are inverted".** Boards
@@ -33,6 +48,15 @@
 - Restored the executable bit on `tools/build_all.sh`, `tools/flash.sh` and
   `tools/sync_shared.sh`. All three are documented as `./tools/...` and none of
   them would run from a fresh clone.
+
+### Upgrading
+
+Nothing to do, and nothing to decide. `CYD_TFT_INVERT` is still the default, a
+device provisioned before this release has no stored value to read, and the
+default is what it gets — so a panel that was correct on v2.2.0 is untouched.
+
+If yours is one of the boards that was never usable, this is the release that
+fixes it: settings page → **Display colours** → *My colours are inverted*.
 
 
 ## v2.2.0 — English or 繁體中文, and text that stopped being jagged — 2026-08-24
