@@ -33,6 +33,7 @@
 #include "weather.h"
 #include "airquality.h"
 #include "sun_moon.h"
+#include "bus_eta.h"
 #include "labels.h"
 #include "bus.h"
 
@@ -211,6 +212,7 @@ void setup() {
   sceneManager_begin();
   weather_begin();
   airquality_begin();
+  busEta_begin();
   bus_begin();
   Serial.println("running.  tap = next scene | hold = pin | hold 4 s = recalibrate");
 }
@@ -243,6 +245,7 @@ void loop() {
   sceneManager_tick();
   weather_tick();       // fetches when due (first fetch shortly after boot)
   airquality_tick();    // AQI fetch, staggered ~5 s after weather
+  busEta_tick();        // bus ETA fetch every 60 s
   bus_tick();           // at most one bus slot per loop -- see bus.cpp
 
   // Refresh the status strip twice a second (cheap; only changed bits repaint),

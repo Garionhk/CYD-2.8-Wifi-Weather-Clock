@@ -69,6 +69,27 @@ struct AppData {
   float    moonIlluminationPct = 0;
   time_t   moonrise = 0, moonset = 0;
 
+  // bus ETA
+  static const int BUS_MAX = 40;
+  static const int BUS_STOP_MAX = 10;
+  struct BusRoute {
+    char route[8];
+    char dest[28];
+    char eta1[8];
+    char eta2[8];
+    char remark1[16];
+    char remark2[16];
+  };
+  struct BusStop {
+    char stopId[20];
+    char name[32];
+    BusRoute routes[BUS_MAX];
+    int     routeCount = 0;
+  };
+  BusStop busStops[BUS_STOP_MAX];
+  int      busStopCount = 0;
+  uint32_t busUpdatedAt = 0;
+  bool     busValid = false;
   // bus -- one entry per slot, indexed alongside g_settings.buses
   BusEta   bus[BUS_SLOTS];
 };
